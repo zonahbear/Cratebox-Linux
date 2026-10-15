@@ -1,6 +1,6 @@
 [package]
 name = "cratebox"
-version = "1.0.0"
+version = "0.1.0"
 edition = "2021"
 description = "Two-deck DJ software for the Pioneer DDJ-FLX4 and friends"
 authors = ["Jonah <zonahbear@gmail.com>"]

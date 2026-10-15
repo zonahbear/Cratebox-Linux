@@ -1,5 +1,7 @@
 # Cratebox for Linux
 
+Version 0.1.0 (early: runs and passes its tests, not yet tried on real sound hardware or a controller).
+
 Two-deck DJ software for the Pioneer DDJ-FLX4 (and the rest of the Pioneer / AlphaTheta range), as a native Linux app: one program, no browser, no server. It does everything the web version does: keylock, RGB waveforms that follow tempo, beat grids you can edit, Camelot keys, phrase detection, hot cues and loops, sync, playlists, rekordbox USB sticks and rekordbox XML.
 
 Written in Rust (egui for the window, ALSA for sound and MIDI, which also reaches PipeWire and PulseAudio through their ALSA plugins). Built for **x86-64-v3** CPUs (Intel Haswell 2013+, AMD Zen 1+).
@@ -7,8 +9,8 @@ Written in Rust (egui for the window, ALSA for sound and MIDI, which also reache
 ## Install
 
 ```sh
-tar xzf cratebox-1.0.0-linux-x86_64-v3.tar.gz
-cd cratebox-1.0.0-linux-x86_64-v3
+tar xzf cratebox-0.1.0-linux-x86_64-v3.tar.gz
+cd cratebox-0.1.0-linux-x86_64-v3
 ./install.sh
 ```
 
