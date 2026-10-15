@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=Cratebox
+GenericName=DJ software
+Comment=Two-deck DJ software for the Pioneer DDJ-FLX4 and friends
+Exec=cratebox %F
+Icon=cratebox
+Terminal=false
+Categories=AudioVideo;Audio;Mixer;
+Keywords=dj;mixer;rekordbox;midi;flx4;
+StartupWMClass=cratebox

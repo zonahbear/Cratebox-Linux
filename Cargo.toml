@@ -1,0 +1,36 @@
+[package]
+name = "cratebox"
+version = "1.0.0"
+edition = "2021"
+description = "Two-deck DJ software for the Pioneer DDJ-FLX4 and friends"
+authors = ["Jonah <zonahbear@gmail.com>"]
+license = "UNLICENSED"
+
+[lib]
+path = "src/lib.rs"
+
+[[bin]]
+name = "cratebox"
+path = "src/main.rs"
+
+[dependencies]
+eframe = { version = "0.32", default-features = false, features = ["glow", "x11", "wayland", "default_fonts"] }
+cpal = "0.16"
+midir = "0.10"
+symphonia = { version = "0.5", features = ["all"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+quick-xml = "0.38"
+dirs = "6"
+png = "0.17"
+
+[profile.release]
+opt-level = 3
+lto = "thin"
+codegen-units = 4
+
+[profile.dev]
+opt-level = 2
+
+[profile.test]
+opt-level = 3
