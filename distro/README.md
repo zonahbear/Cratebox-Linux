@@ -52,6 +52,11 @@ From Linux there is an untested fallback:
 - **Claude:** in the desktop menu. Sign in with your Claude account. Updates come with the system's
   apt updates (Anthropic's repo is registered). Cowork needs hardware virtualization on (it is on a
   MacBook); users are put in the `kvm` group for it.
+- **Updating Cratebox:** menu → **Update Cratebox** downloads the newest app from the `app-latest`
+  release (GitHub → Actions → **cratebox-app**, a few minutes), checks it and replaces
+  `/usr/bin/cratebox` (the old one stays as `cratebox.previous`). The repo is private, so the first
+  run asks for a GitHub fine-grained token with read access to it; it is kept in
+  `~/.config/cratebox/github-token`. No new ISO needed for app changes.
 - **Boot menu:** the stick waits 3 s on its menu; the installed system doesn't show one (hold **Esc**
   at power-on to get it, e.g. for an older kernel).
 - **Sleep:** s2idle only (see below). Closing the lid is fine, but shut down before a long stretch

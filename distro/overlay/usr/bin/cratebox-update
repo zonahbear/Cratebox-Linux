@@ -1,0 +1,74 @@
+#!/usr/bin/python3
+"""Update Cratebox: download the newest app from the "app-latest" GitHub release (built by the
+cratebox-app workflow), check its sha256 and that it runs, then replace /usr/bin/cratebox.
+The repo is private, so it needs a GitHub token with read access to it; asked once, then kept in
+~/.config/cratebox/github-token (mode 600)."""
+import getpass, hashlib, json, os, subprocess, sys, tempfile, urllib.request
+
+REPO = "zonahbear/Cratebox-Linux"
+TAG = "app-latest"
+TOKEN_FILE = os.path.expanduser("~/.config/cratebox/github-token")
+
+
+def token():
+    try:
+        with open(TOKEN_FILE) as f:
+            return f.read().strip()
+    except FileNotFoundError:
+        pass
+    print("First time: paste a GitHub token that can read %s" % REPO)
+    print("(github.com → Settings → Developer settings → Fine-grained token, Contents: read-only)")
+    t = getpass.getpass("Token: ").strip()
+    os.makedirs(os.path.dirname(TOKEN_FILE), exist_ok=True)
+    fd = os.open(TOKEN_FILE, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "w") as f:
+        f.write(t + "\n")
+    return t
+
+
+def get(url, tok, accept="application/vnd.github+json"):
+    req = urllib.request.Request(url, headers={"Authorization": "Bearer " + tok, "Accept": accept})
+    with urllib.request.urlopen(req, timeout=60) as r:
+        return r.read()
+
+
+def main():
+    tok = token()
+    try:
+        rel = json.loads(get("https://api.github.com/repos/%s/releases/tags/%s" % (REPO, TAG), tok))
+    except urllib.error.HTTPError as e:
+        if e.code in (401, 403, 404):
+            os.remove(TOKEN_FILE)
+            sys.exit("GitHub refused the token (or there is no %s release yet). Run this again to enter a new one." % TAG)
+        raise
+    assets = {a["name"]: a["url"] for a in rel["assets"]}
+    if "cratebox" not in assets or "cratebox.sha256" not in assets:
+        sys.exit("The %s release has no cratebox binary." % TAG)
+    print("Downloading Cratebox (%s)…" % rel.get("name", TAG))
+    data = get(assets["cratebox"], tok, "application/octet-stream")
+    want = get(assets["cratebox.sha256"], tok, "application/octet-stream").split()[0].decode()
+    if hashlib.sha256(data).hexdigest() != want:
+        sys.exit("Download is damaged (sha256 mismatch). Nothing was changed.")
+    with tempfile.NamedTemporaryFile(delete=False, prefix="cratebox-") as f:
+        f.write(data)
+    os.chmod(f.name, 0o755)
+    new = subprocess.run([f.name, "--version"], capture_output=True, text=True)
+    if new.returncode != 0:
+        sys.exit("The new build doesn't start here: %s Nothing was changed." % new.stderr.strip())
+    old = subprocess.run(["/usr/bin/cratebox", "--version"], capture_output=True, text=True).stdout.strip()
+    print("Installed: %s\nNew:       %s" % (old or "?", new.stdout.strip()))
+    print("Your password is needed to replace /usr/bin/cratebox.")
+    # Keep the old one as cratebox.previous, so a bad build can be rolled back by hand.
+    subprocess.run(["sudo", "sh", "-c", 'cp -f /usr/bin/cratebox /usr/bin/cratebox.previous && install -m 0755 "$1" /usr/bin/cratebox', "-", f.name], check=True)
+    os.remove(f.name)
+    print("Done. Restart Cratebox to use the new version.")
+
+
+if __name__ == "__main__":
+    try:
+        main()
+    except SystemExit as e:
+        print(e)
+    except (KeyboardInterrupt, subprocess.CalledProcessError, OSError) as e:
+        print("Update stopped: %s" % e)
+    input("\nPress Enter to close.")

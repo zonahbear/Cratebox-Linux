@@ -1,0 +1,36 @@
+# Cratebox app only (a few minutes): builds the binary and publishes it to the "app-latest"
+# release, which `cratebox-update` (the "Update Cratebox" menu entry on Cratebox OS) installs.
+# Manual only, like cratebox-os.
+name: cratebox-app
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  app:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build Cratebox
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libasound2-dev
+          cargo build --release
+          ./target/x86_64-unknown-linux-gnu/release/cratebox --version
+
+      - name: Publish to the app-latest release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          cd target/x86_64-unknown-linux-gnu/release
+          sha256sum cratebox > cratebox.sha256
+          gh release delete app-latest --yes --cleanup-tag 2>/dev/null || true
+          gh release create app-latest --prerelease --target "$GITHUB_SHA" \
+            --title "Cratebox app ($(./cratebox --version))" \
+            --notes "Built from $GITHUB_SHA. On Cratebox OS: menu → Update Cratebox." \
+            cratebox cratebox.sha256

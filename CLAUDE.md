@@ -58,6 +58,7 @@ distro/            Cratebox OS ISO: build-iso.sh remasters Lubuntu 26.04.1 (laye
                    installed system, live/ = live-session script. distro/README.md = guide + verified/proposed table.
                    plymouth/make-theme.py draws the boot splash PNGs (committed). Calamares "Minimal" always unpacks
                    the full layer, then cratebox-minimal-install autoremoves Lubuntu's extras (list made in chroot-setup)
+.github/workflows/cratebox-app.yml manual-only: app binary → release "app-latest" (overlay/usr/bin/cratebox-update installs it)
 .github/workflows/cratebox-os.yml  manual-only ubuntu job → release "kiosk-latest" (ISO in <2 GiB parts)
 ```
 

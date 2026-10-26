@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=Update Cratebox
+Comment=Download the newest Cratebox from GitHub and install it
+Exec=cratebox-update
+Icon=cratebox
+Terminal=true
+Categories=AudioVideo;Audio;System;
