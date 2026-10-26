@@ -1013,11 +1013,28 @@ impl Gui {
             egui::ScrollArea::vertical().max_height(max_h).show(ui, |ui| {
                 ui.heading("Library");
                 let s = &self.app.store.settings;
-                let mut br = s.bpm_range;
-                egui::ComboBox::from_label("BPM range (where half/double-time tracks land)").selected_text(crate::analysis::BPM_RANGES[br].0).show_ui(ui, |ui| {
+                let (mut br, custom) = (s.bpm_range, crate::analysis::BPM_CUSTOM);
+                let name = if br >= custom { "Custom" } else { crate::analysis::BPM_RANGES[br].0 };
+                egui::ComboBox::from_label("BPM range (where half/double-time tracks land)").selected_text(name).show_ui(ui, |ui| {
                     for (k, r) in crate::analysis::BPM_RANGES.iter().enumerate() { ui.selectable_value(&mut br, k, r.0); }
+                    ui.selectable_value(&mut br, custom, "Custom");
                 });
                 if br != s.bpm_range { self.app.set_bpm_range(br); }
+                if br >= custom {
+                    // the top end is kept at least an octave above the bottom, so every tempo has a place
+                    let (mut lo, mut hi) = (self.app.store.settings.bpm_lo, self.app.store.settings.bpm_hi);
+                    let mut done = false;
+                    ui.horizontal(|ui| {
+                        ui.label("From");
+                        let r = ui.add(egui::DragValue::new(&mut lo).range(40.0..=150.0).speed(0.5).suffix(" BPM")); done |= r.lost_focus() || r.drag_stopped();
+                        ui.label("to");
+                        let r = ui.add(egui::DragValue::new(&mut hi).range(79.0..=300.0).speed(0.5).suffix(" BPM")); done |= r.lost_focus() || r.drag_stopped();
+                    });
+                    let (l, h) = crate::analysis::custom_range(lo, hi);
+                    self.app.store.settings.bpm_lo = l;
+                    self.app.store.settings.bpm_hi = h - 1.0;
+                    if done { self.app.set_bpm_range(custom); }
+                }
                 let mut ws = self.app.store.settings.wave_style.clone();
                 egui::ComboBox::from_label("Waveform").selected_text(if ws == "3band" { "3-band" } else { "RGB (red lows, green mids, blue highs)" }).show_ui(ui, |ui| {
                     ui.selectable_value(&mut ws, "rgb".to_string(), "RGB (red lows, green mids, blue highs)");
@@ -1512,9 +1529,18 @@ impl eframe::App for Gui {
             let n = shown.len() as f32;
             let s = &self.app.store.settings;
             let (wave, browse) = (s.wave, s.browse);
+            // the deck row keeps its size; dragging the library's top edge trades height between the
+            // waveforms and the library (double-click: back to automatic)
+            let row_h = if four { (full.height() * 0.46).clamp(300.0, 440.0) } else { (full.height() * 0.47).clamp(260.0, 400.0) };
+            let lib_h = s.lib_h;
             // ---- the waveforms, stacked 1 2 (3 4)
             let lane_h = if wave { (full.height() - (n - 1.0) * GAP) / n }
                 else if browse { if four { 40.0 } else { 64.0 } }
+                else if lib_h > 0.0 {
+                    let spare = full.height() - row_h - 4.0 - GAP - n * GAP;
+                    let min_lane = if four { 36.0 } else { 48.0 };
+                    ((spare - lib_h) / n).clamp(min_lane, ((spare - 90.0) / n).max(min_lane))
+                }
                 else if four { (full.height() * 0.075).clamp(42.0, 72.0) } else { (full.height() * 0.12).clamp(70.0, 130.0) };
             for (k, &i) in shown.iter().enumerate() {
                 let r = Rect::from_min_size(pos2(full.left(), full.top() + k as f32 * (lane_h + GAP)), vec2(full.width(), lane_h));
@@ -1524,12 +1550,6 @@ impl eframe::App for Gui {
             let mut top = full.top() + n * (lane_h + GAP) + 2.0;
             // ---- decks either side of the mixer (4 decks: 1 over 3 on the left, 2 over 4 on the right)
             if !browse {
-                let auto = if four { (full.height() * 0.46).clamp(300.0, 440.0) } else { (full.height() * 0.47).clamp(260.0, 400.0) };
-                // the library's top edge drags (double-click: back to automatic); the decks take what's left
-                let min_row = if four { 280.0 } else { 230.0 };
-                let max_row = (full.bottom() - top - 90.0).max(min_row);
-                let lib_h = self.app.store.settings.lib_h;
-                let row_h = if lib_h > 0.0 { (full.bottom() - lib_h - top - GAP - 2.0).clamp(min_row, max_row) } else { auto.min(max_row) };
                 let mixer_w = if four { 300.0 } else { 250.0 };
                 let dw = (full.width() - mixer_w - 2.0 * GAP) / 2.0;
                 let mx = Rect::from_min_size(pos2(full.left() + dw + GAP, top), vec2(mixer_w, row_h));

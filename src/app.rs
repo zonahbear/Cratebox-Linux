@@ -2,7 +2,7 @@
 //! Everything here runs on the UI thread except the jobs it spawns (decoding, analysis, scanning),
 //! which report back through a channel that `poll` drains every frame.
 
-use crate::analysis::{analyze, fold_bpm, mono_for, phrase_analysis, Opts, Phrase, BPM_RANGES};
+use crate::analysis::{analyze, custom_range, fold_bpm, mono_for, phrase_analysis, Opts, Phrase, BPM_CUSTOM, BPM_RANGES};
 use crate::audio_io::{guess_controller_output, list_outputs, AudioIo, OutDev};
 use crate::beatfx::BeatFx;
 use crate::deck::{build_overview, Deck, DeckAna, DeckEvent, JogKind, PadMode, Peer};
@@ -93,7 +93,12 @@ pub struct App {
     pub scanning: usize,
 }
 
-pub fn range_of(i: usize) -> (f64, f64) { let r = BPM_RANGES[i.min(3)]; (r.1, r.2) }
+pub fn range_of(s: &crate::store::Settings) -> (f64, f64) {
+    if s.bpm_range >= BPM_CUSTOM { return custom_range(s.bpm_lo, s.bpm_hi); }
+    let r = BPM_RANGES[s.bpm_range]; (r.1, r.2)
+}
+/// how a range reads in the UI ("70-180")
+pub fn range_name(r: (f64, f64)) -> String { format!("{}-{}", r.0, r.1 - 1.0) }
 pub fn now_date() -> String {
     // yyyy-mm-dd from the system clock (UTC), for naming imported folders
     let secs = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0) as i64;
@@ -173,7 +178,7 @@ impl App {
         self.status_until = Instant::now() + Duration::from_secs_f32(if secs <= 0.0 { 3600.0 } else { secs });
     }
     pub fn status_text(&self) -> &str { if Instant::now() < self.status_until { &self.status } else { "" } }
-    pub fn range(&self) -> (f64, f64) { range_of(self.store.settings.bpm_range) }
+    pub fn range(&self) -> (f64, f64) { range_of(&self.store.settings) }
 
 
     // ======================= library =======================
@@ -282,7 +287,7 @@ impl App {
         let r = self.range();
         for t in self.tracks.iter_mut() { if !t.grid_manual { if let Some(b) = t.bpm { t.bpm = Some(fold_bpm(b, r)); } } }
         self.apply_view(true);
-        self.say(&format!("BPM range {}: half/double-time tracks now read in that range", BPM_RANGES[i].0), 5.0);
+        self.say(&format!("BPM range {}: half/double-time tracks now read in that range", range_name(r)), 5.0);
     }
 
     // ======================= loading + analysis =======================
@@ -1031,7 +1036,7 @@ impl App {
                 match res {
                     Ok(r) => {
                         let t = &mut self.tracks[i];
-                        if !t.grid_manual { t.bpm = Some(fold_bpm(r.bpm, range_of(self.store.settings.bpm_range))); t.first_beat = Some(r.first_beat); }
+                        if !t.grid_manual { t.bpm = Some(fold_bpm(r.bpm, range_of(&self.store.settings))); t.first_beat = Some(r.first_beat); }
                         if t.key_from.as_deref() != Some("rekordbox") || t.key.unwrap_or(-1) < 0 { t.key = Some(r.key); }
                         t.phrases = Some(r.phrases); t.duration = Some(r.duration); t.ver = crate::analysis::ANALYSIS_VER;
                         if t.artist.is_empty() { if let Some(a) = r.artist { t.artist = a; if let Some(ti) = r.title { t.title = ti; } } }

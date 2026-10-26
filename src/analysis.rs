@@ -783,12 +783,39 @@ pub fn analyze(x: &[f32], fs: f64, xw: Option<(&[f32], f64)>, range: (f64, f64),
     out
 }
 
-/// BPM ranges, like Serato's and Traktor's: where half/double-time tempos get folded to
-pub const BPM_RANGES: [(&str, f64, f64); 4] = [("58-115", 58.0, 116.0), ("68-135", 68.0, 136.0), ("78-155", 78.0, 156.0), ("88-175", 88.0, 176.0)];
+/// BPM ranges, like Serato's and Traktor's: where half/double-time tempos get folded to. 70-180 is
+/// wider than an octave, so most tracks keep the tempo the analyser hears. After these: Custom.
+pub const BPM_RANGES: [(&str, f64, f64); 5] = [("58-115", 58.0, 116.0), ("68-135", 68.0, 136.0), ("78-155", 78.0, 156.0), ("88-175", 88.0, 176.0), ("70-180", 70.0, 181.0)];
+/// the bpm_range index of the custom range (settings bpm_lo..bpm_hi)
+pub const BPM_CUSTOM: usize = BPM_RANGES.len();
+/// a custom range made usable: whole numbers, and at least an octave wide so every tempo folds into it
+pub fn custom_range(lo: f64, hi: f64) -> (f64, f64) {
+    let lo = lo.round().clamp(40.0, 150.0);
+    (lo, hi.round().clamp(2.0 * lo - 1.0, 300.0) + 1.0)
+}
 pub fn fold_bpm(b: f64, range: (f64, f64)) -> f64 {
     if !(b > 0.0) { return b; }
     let mut b = b;
     while b < range.0 { b *= 2.0; }
     while b >= range.1 { b /= 2.0; }
     b
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn bpm_ranges() {
+        let wide = (BPM_RANGES[4].1, BPM_RANGES[4].2);
+        assert_eq!(fold_bpm(174.0, wide), 174.0);
+        assert_eq!(fold_bpm(70.0, wide), 70.0);
+        assert_eq!(fold_bpm(180.0, wide), 180.0);
+        assert_eq!(fold_bpm(181.0, wide), 90.5);
+        assert_eq!(fold_bpm(65.0, wide), 130.0);
+        // custom: kept at least an octave wide, top end inclusive
+        assert_eq!(custom_range(85.0, 100.0), (85.0, 170.0));
+        assert_eq!(custom_range(60.0, 200.0), (60.0, 201.0));
+        let r = custom_range(85.0, 100.0);
+        for b in [40.0, 84.0, 169.0, 170.0, 333.0] { let f = fold_bpm(b, r); assert!(f >= r.0 && f < r.1, "{b} -> {f}"); }
+    }
 }
