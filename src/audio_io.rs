@@ -1,5 +1,5 @@
 //! Sound output through cpal (ALSA on Linux, which also reaches PipeWire and PulseAudio through their
-//! ALSA plugins). The engine lives behind a mutex that only the audio callback normally touches; it
+//! ALSA plugins; WASAPI shared mode on Windows). The engine lives behind a mutex that only the audio callback normally touches; it
 //! try-locks, so switching devices never makes the callback wait. With no usable sound card the
 //! engine still runs on a timer ("no output"), so the app keeps working.
 
@@ -84,6 +84,10 @@ where T: cpal::SizedSample + cpal::FromSample<f32> {
     }, move |e| { if let Ok(mut x) = e2.lock() { *x = Some(e.to_string()); } }, None).map_err(|e| e.to_string())
 }
 
+#[cfg(windows)]
+fn promote_to_realtime() { crate::win::pro_audio_thread(); }
+
+#[cfg(unix)]
 /// Puts the calling (audio callback) thread on SCHED_FIFO, so a busy UI or analysis thread can't delay
 /// it. Needs an rtprio limit (Cratebox OS grants one); without it the thread stays at normal priority.
 /// No RLIMIT_RTTIME is set (rtkit needs one, and the kernel kills the whole app with SIGXCPU when an

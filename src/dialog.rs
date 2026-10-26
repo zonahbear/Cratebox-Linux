@@ -23,6 +23,9 @@ pub struct FileDialog {
 pub fn home() -> PathBuf { dirs::home_dir().unwrap_or_else(|| PathBuf::from("/")) }
 
 /// mounted drives (USB sticks, SD cards, other disks)
+#[cfg(windows)]
+pub fn mounts() -> Vec<PathBuf> { crate::win::drives() }
+#[cfg(not(windows))]
 pub fn mounts() -> Vec<PathBuf> {
     let user = std::env::var("USER").unwrap_or_default();
     let mut out = vec![];
@@ -94,7 +97,7 @@ impl FileDialog {
                 let m = home().join("Music");
                 if m.is_dir() && ui.button("Music").clicked() { self.go(m); }
                 for mnt in mounts() {
-                    let label = format!("⏏ {}", mnt.file_name().map(|s| s.to_string_lossy().to_string()).unwrap_or_default());
+                    let label = format!("⏏ {}", mnt.file_name().map(|s| s.to_string_lossy().to_string()).unwrap_or_else(|| mnt.display().to_string()));
                     if ui.button(label).on_hover_text(mnt.display().to_string()).clicked() { self.go(mnt); }
                 }
             });

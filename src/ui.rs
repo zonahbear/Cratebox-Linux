@@ -1,7 +1,8 @@
 //! The window, laid out like an XDJ's screen: a slim header, the scrolling waveforms (2 or 4 decks) with
 //! each deck's numbers above its waveform and the whole track below it, then the decks' controls either
 //! side of the mixer (channels 3 1 2 4 in 4-deck mode, the BEAT FX unit underneath), then the library.
-//! WAVE mode shows just the waveforms. Sized for 1152×720 points (a MacBook10,1 at 2x) and up.
+//! WAVE mode shows just the waveforms. Sized for 1152×720 points (a MacBook10,1 at 2x) and up; on Windows
+//! `fit_scale` zooms the whole thing so a 1080p or 1440p screen shows that same layout, just bigger.
 
 use crate::app::{level, App};
 use crate::deck::{PadMode, JUMPS, LOOP_SIZES, RANGES, JogKind};
@@ -25,6 +26,7 @@ pub struct DragList(pub String);
 
 pub struct Gui {
     pub app: App,
+    fit_wait: u8,
     deck_rects: [Rect; DECKS],
     jog_last: [Option<f32>; DECKS],
     lane_drag: [Option<(f32, f32, std::time::Instant, bool, bool)>; DECKS],
@@ -65,7 +67,7 @@ impl Gui {
         let wake: std::sync::Arc<dyn Fn() + Send + Sync> = std::sync::Arc::new(move || ctx.request_repaint());
         app.repaint = Some(wake.clone());
         app.midi_io.set_wake(wake);
-        Gui { app, deck_rects: [Rect::NOTHING; DECKS], jog_last: [None; DECKS], lane_drag: [None; DECKS], pad_held: None, frames: 0, test_shot: None,
+        Gui { app, fit_wait: 0, deck_rects: [Rect::NOTHING; DECKS], jog_last: [None; DECKS], lane_drag: [None; DECKS], pad_held: None, frames: 0, test_shot: None,
             rects: Default::default(), uitest: crate::uitest::UiTest::from_env(), heat_open: false, heat_paste: String::new(), hitting: false, focus_search: false, keys_open: false }
     }
 
@@ -1120,7 +1122,7 @@ impl Gui {
                     });
                     if matches!(self.app.view, View::Pl(_)) && ui.button("Remove from playlist").clicked() { self.app.remove_from_playlist(); ui.close(); }
                     if let Some(tr) = self.app.track(&t.id) {
-                        if ui.button("Show in folder").clicked() { if let Some(dir) = tr.path.parent() { let _ = std::process::Command::new("xdg-open").arg(dir).spawn(); } ui.close(); }
+                        if ui.button("Show in folder").clicked() { if let Some(dir) = tr.path.parent() { let _ = std::process::Command::new(if cfg!(windows) { "explorer" } else { "xdg-open" }).arg(dir).spawn(); } ui.close(); }
                     }
                 });
             }
@@ -1649,6 +1651,7 @@ fn short_fx(fx: FxKind) -> &'static str {
 impl eframe::App for Gui {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         self.frames += 1;
+        if cfg!(windows) || std::env::var_os("CRATEBOX_FIT").is_some() { fit_scale(ctx, &mut self.fit_wait); }
         self.app.poll();
         if std::env::var("CRATEBOX_DEMO").is_ok() { self.demo(); }
         self.keyboard(ctx);
@@ -1735,6 +1738,22 @@ impl eframe::App for Gui {
             if t.done { ctx.send_viewport_cmd(egui::ViewportCommand::Close); }
         }
     }
+}
+
+/// Windows: scale the whole window like the MacBook10,1's screen, which shows 1152×720 points. The layout
+/// stays the same and fills the window: 1.5x full screen at 1920×1080 (about 1.4x maximized), 2x at
+/// 2560×1440, whatever Windows' own display scaling says. (CRATEBOX_FIT=1 does the same on Linux.)
+/// The window's size comes in measured at the zoom of the frame before a change, so after changing it
+/// `wait` skips two frames until the size is measured at the new zoom.
+fn fit_scale(ctx: &egui::Context, wait: &mut u8) {
+    if *wait > 0 { *wait -= 1; return; }
+    let Some(inner) = ctx.input(|i| i.viewport().inner_rect) else { return };
+    let ppp = ctx.pixels_per_point();
+    let (w, h) = (inner.width() * ppp, inner.height() * ppp);
+    if w < 1.0 || h < 1.0 { return; }
+    let want = (h / 720.0).min(w / 1152.0).max(0.5);
+    let zoom = want / ctx.native_pixels_per_point().unwrap_or(1.0);
+    if (ctx.zoom_factor() - zoom).abs() > 0.005 { ctx.set_zoom_factor(zoom); *wait = 2; }
 }
 
 fn save_png(path: &PathBuf, img: &egui::ColorImage) {

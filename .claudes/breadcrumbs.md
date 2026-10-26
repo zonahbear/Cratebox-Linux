@@ -70,3 +70,14 @@
 - Updater: cratebox-app workflow → release app-latest; `cratebox-update` (menu "Update Cratebox") installs it with a
   token in ~/.config/cratebox/github-token. Ships in the ISO after the one built from cda9652.
 - Next: Jonah tests the ISO on the MacBook (splash, minimal install, Claude sign-in, sleep/wake, HEAT).
+
+## 2026-10-26 late: Windows port (branch claude/project-thread-k9y5qa)
+- Jonah: "windows app port of version inside iso", "optimize for 1080p and 1440p", "MAINTAIN LAYOUT AND LOOKS".
+- Same crate, cfg-gated: zbus Linux-only, `windows` 0.58 on Windows. heat_win.rs = WinRT BLE (advertisement watcher,
+  paired-device list, GATT notify, custom "just works" pairing). Lorax Device impl moved into `lorax_device!` (shared).
+  Audio: cpal WASAPI + MMCSS Pro Audio (cpal without audio_thread_priority sets no priority on Windows).
+- Scaling: `ui::fit_scale` sets egui zoom so the window holds 720 pt height (min width 1152 pt). Gotcha: the viewport
+  rect arrives measured at the previous zoom, so it waits 2 frames after a change (else it oscillates).
+- Verified: cargo test (Linux) all pass; Windows exe under Wine 9 at 1920x1080 / 2560x1440 (same 1280x720-pt layout),
+  4 decks + HEAT simulator. Wine ignored with_maximized/fullscreen, so sizes were forced with a temp patch.
+- Next: Jonah runs cratebox.exe on his PC: sound (WASAPI buffer), FLX4 (Pioneer driver?), HEAT over Windows BLE.

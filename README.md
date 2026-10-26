@@ -18,6 +18,23 @@ That puts `cratebox` in `~/.local/bin` and Cratebox in your app menu; no root ne
 
 Needs: an x86-64-v3 CPU, glibc 2.30 or newer (Ubuntu 20.04+, Debian 11+, Fedora 32+, Arch, Mint 20+...), ALSA (`libasound2`, on every desktop distro) and OpenGL (any graphics driver from the last decade). Works on X11 and Wayland.
 
+## Windows
+
+The same app runs on Windows 10 (1703 or later) and 11: one file, `cratebox.exe`, nothing to install
+(from the `windows-latest` release, made by the manual `cratebox-windows` workflow). Double-click it;
+Windows SmartScreen may ask first, since it isn't signed (More info → Run anyway).
+
+- It opens maximized and scales the whole screen the way the MacBook shows it (1152×720 points): about
+  1.4x maximized on a 1920×1080 screen, 1.5x full screen (`cratebox.exe --kiosk`), 2x full screen on 2560×1440.
+- Sound goes through WASAPI (shared mode); the audio thread joins Windows' "Pro Audio" scheduling class.
+  If the FLX4 isn't listed under Settings → Sound, install Pioneer DJ's DDJ-FLX4 driver.
+- Windows lets one app at a time use a MIDI controller: quit rekordbox (or anything else using the FLX4) first.
+- HEAT uses Windows' own Bluetooth LE. If the Puffco won't connect, remove it in Settings → Bluetooth & devices,
+  wake it and try again.
+- Your library data is in `%APPDATA%\cratebox` (same JSON files as on Linux).
+- Build it yourself from Linux: `rustup target add x86_64-pc-windows-gnu`, install MinGW (`apt install mingw-w64`),
+  then `cargo build --release --target x86_64-pc-windows-gnu`.
+
 ## First run
 
 1. Plug in the FLX4 (USB). Cratebox finds it by name and picks its mapping; the pill at the top turns green.

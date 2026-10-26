@@ -24,9 +24,21 @@ serde_json = "1"
 quick-xml = "0.38"
 dirs = "6"
 png = "0.17"
-# HEAT: BlueZ over D-Bus in pure Rust (no libdbus), and SHA-256 for the Lorax unlock
-zbus = { version = "5", default-features = false, features = ["async-io", "blocking-api"] }
+# SHA-256 for the HEAT Lorax unlock
 sha2 = "0.10"
+
+# HEAT on Linux: BlueZ over D-Bus in pure Rust (no libdbus)
+[target.'cfg(target_os = "linux")'.dependencies]
+zbus = { version = "5", default-features = false, features = ["async-io", "blocking-api"] }
+
+# Windows: HEAT over WinRT Bluetooth LE, MMCSS "Pro Audio" for the audio thread, the local clock
+[target.'cfg(windows)'.dependencies]
+windows = { version = "0.58", features = [
+  "Foundation", "Foundation_Collections", "Storage_Streams",
+  "Devices_Bluetooth", "Devices_Bluetooth_Advertisement", "Devices_Bluetooth_GenericAttributeProfile",
+  "Devices_Enumeration", "Devices_Radios",
+  "Win32_Foundation", "Win32_Storage_FileSystem", "Win32_System_Console", "Win32_System_Threading", "Win32_System_WinRT", "Win32_UI_Shell", "Win32_UI_WindowsAndMessaging",
+] }
 
 [profile.release]
 opt-level = 3

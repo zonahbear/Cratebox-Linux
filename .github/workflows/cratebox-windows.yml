@@ -1,0 +1,37 @@
+# Cratebox for Windows (a few minutes): cross-compiles cratebox.exe on Linux with MinGW (cheaper than a
+# Windows runner) and publishes it to the "windows-latest" release. Manual only, like the others.
+name: cratebox-windows
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  windows:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build cratebox.exe
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y mingw-w64
+          rustup target add x86_64-pc-windows-gnu
+          cargo build --release --target x86_64-pc-windows-gnu
+          x86_64-w64-mingw32-strip target/x86_64-pc-windows-gnu/release/cratebox.exe
+
+      - name: Publish to the windows-latest release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          cd target/x86_64-pc-windows-gnu/release
+          sha256sum cratebox.exe > cratebox.exe.sha256
+          v=$(grep -m1 '^version' "$GITHUB_WORKSPACE/Cargo.toml" | cut -d'"' -f2)
+          gh release delete windows-latest --yes --cleanup-tag 2>/dev/null || true
+          gh release create windows-latest --prerelease --target "$GITHUB_SHA" \
+            --title "Cratebox for Windows ($v)" \
+            --notes "Built from $GITHUB_SHA. Download cratebox.exe and run it (Windows 10 1703+ / 11, x86-64-v3 CPU)." \
+            cratebox.exe cratebox.exe.sha256
