@@ -280,11 +280,12 @@ impl Gui {
         self.deck_rects[i] = rect;
         self.reg(format!("deck{i}.area"), rect);
         let inner = rect.shrink2(vec2(8.0, 7.0));
-        if inner.height() >= 200.0 { self.deck_tall(ui, i, inner) } else { self.deck_compact(ui, i, inner) }
+        if self.screens() { self.deck_display(ui, i, inner) }
+        else if inner.height() >= 200.0 { self.deck_tall(ui, i, inner) } else { self.deck_compact(ui, i, inner) }
     }
 
-    /// two decks: the iOS performance deck. Tempo fader on the outside edge; the jog with SYNC/MT/Q, big CUE and
-    /// PLAY, TAP/GRID beside it; then the loop row, the pad-mode tabs and two rows of pads
+    /// two decks, XDJ style: tempo fader on the outside edge; a screen (platter, time, key, BPM, beat counter);
+    /// SYNC MT Q TAP GRID; wide CUE and PLAY; the loop row; the pad-mode tabs and two rows of pads
     fn deck_tall(&mut self, ui: &mut Ui, i: usize, inner: Rect) {
         let col = deck_color(i);
         let h = inner.height();
@@ -292,55 +293,151 @@ impl Gui {
         let tempo_w = 24.0;
         let outer_left = i % 2 == 0;
         let tempo_r = if outer_left { Rect::from_min_size(inner.min, vec2(tempo_w, h)) } else { Rect::from_min_size(pos2(inner.right() - tempo_w, inner.top()), vec2(tempo_w, h)) };
-        let area = if outer_left { Rect::from_min_max(pos2(tempo_r.right() + 10.0, inner.top()), inner.max) } else { Rect::from_min_max(inner.min, pos2(tempo_r.left() - 10.0, inner.bottom())) };
+        let area = if outer_left { Rect::from_min_max(pos2(tempo_r.right() + 8.0, inner.top()), inner.max) } else { Rect::from_min_max(inner.min, pos2(tempo_r.left() - 8.0, inner.bottom())) };
         self.tempo(ui, i, tempo_r, rh, font);
-        let pad_h = ((h - 2.0 * rh) * 0.2).clamp(24.0, 40.0);
-        let bottom_h = 2.0 * rh + 2.0 * pad_h + 4.0 * GAP;
-        let top = Rect::from_min_max(area.min, pos2(area.right(), area.bottom() - bottom_h - 4.0));
-        // jog + the cluster beside it, centred in the top block
-        let jog_d = top.height().min(area.width() * 0.42);
-        let cw = (area.width() - jog_d - 16.0).min(176.0);
-        let gx = area.left() + (area.width() - jog_d - 16.0 - cw) / 2.0;
-        let jr = Rect::from_min_size(pos2(gx, top.center().y - jog_d / 2.0), vec2(jog_d, jog_d));
-        self.jog(ui, i, jr);
-        let cx = jr.right() + 16.0;
-        let cb = (top.height() - 2.0 * rh - 4.0 * GAP).clamp(34.0, 56.0);
-        let ch = 2.0 * rh + cb + 2.0 * GAP * 2.0;
-        let y0 = top.center().y - ch / 2.0;
-        let r_sync = Rect::from_min_size(pos2(cx, y0), vec2(cw, rh));
-        let r_cp = Rect::from_min_size(pos2(cx, r_sync.bottom() + 2.0 * GAP), vec2(cw, cb));
-        let r_tap = Rect::from_min_size(pos2(cx, r_cp.bottom() + 2.0 * GAP), vec2(cw, rh));
+        let w = area.width();
+        let cb = 34.0;
+        let pad_h = ((h - 4.0 * rh - cb) * 0.2).clamp(24.0, 38.0);
+        let pads_h = rh + 2.0 * pad_h + 2.0 * GAP;
+        let screen_h = (h - pads_h - 2.0 * rh - cb - 4.0 * GAP).max(60.0);
+        let screen = Rect::from_min_size(area.min, vec2(w, screen_h));
+        self.deck_screen(ui, i, screen, outer_left);
+        let r_ctl = Rect::from_min_size(pos2(area.left(), screen.bottom() + GAP), vec2(w, rh));
         {
-            let ui = &mut row_ui(ui, r_sync);
+            let ui = &mut row_ui(ui, r_ctl);
             let d = &self.app.decks[i];
-            let (sync, mt, q) = (d.sync, d.mt, d.quant);
-            let u = (cw - 2.0 * GAP) / 3.4;
+            let (sync, mt, q, g) = (d.sync, d.mt, d.quant, self.app.ui.grid_open[i]);
+            let u = (w - 5.0 * GAP) / 6.4;
             let r = button(ui, "SYNC", vec2(u * 1.4, rh), sync, col, font);
             if !self.learn(ui, &r, "sync", i as i8) && r.clicked() { self.app.set_sync(i, !sync); }
             let r = button(ui, "MT", vec2(u, rh), mt, col, font).on_hover_text("Master tempo (keylock): change tempo without changing the key");
             if !self.learn(ui, &r, "keylock", i as i8) && r.clicked() { self.app.set_mt(i, !mt); }
             let r = button(ui, "Q", vec2(u, rh), q, col, font).on_hover_text("Quantize: snap cues and loops to the beat grid");
             if !self.learn(ui, &r, "quant", i as i8) && r.clicked() { self.app.decks[i].quant = !q; }
-        }
-        let gap = (cw - 2.0 * cb) / 3.0;
-        let cue_r = Rect::from_min_size(pos2(cx + gap, r_cp.top()), vec2(cb, cb));
-        let play_r = Rect::from_min_size(pos2(cx + 2.0 * gap + cb, r_cp.top()), vec2(cb, cb));
-        self.cue_play(ui, i, cue_r, play_r, cb);
-        {
-            let ui = &mut row_ui(ui, r_tap);
-            let u = (cw - 2.0 * GAP) / 3.0;
             if button(ui, "TAP", vec2(u, rh), false, col, font).on_hover_text("Tap along with the beat (4+ taps) to set the BPM").clicked() { self.app.decks[i].tap(); }
-            let g = self.app.ui.grid_open[i];
             let r = button(ui, "GRID", vec2(u, rh), g, col, font).on_hover_text("Edit the beat grid");
             self.reg(format!("deck{i}.grid"), r.rect);
             if r.clicked() { self.app.ui.grid_open[i] = !g; }
             self.loop_len(ui, i, vec2(u, rh), font);
         }
-        let bottom = Rect::from_min_max(pos2(area.left(), area.bottom() - bottom_h), area.max);
-        let r_loop = Rect::from_min_size(bottom.min, vec2(bottom.width(), rh));
+        // CUE and PLAY side by side, full width (the play side towards the mixer, like a CDJ's)
+        let r_cp = Rect::from_min_size(pos2(area.left(), r_ctl.bottom() + GAP), vec2(w, cb));
+        let half = (w - GAP) / 2.0;
+        let cue_r = Rect::from_min_size(r_cp.min, vec2(half, cb));
+        let play_r = Rect::from_min_size(pos2(r_cp.left() + half + GAP, r_cp.top()), vec2(half, cb));
+        self.cue_play(ui, i, cue_r, play_r, cb);
+        let r_loop = Rect::from_min_size(pos2(area.left(), r_cp.bottom() + GAP), vec2(w, rh));
         self.loop_row(ui, i, r_loop, rh, font);
-        let rest = Rect::from_min_max(pos2(bottom.left(), r_loop.bottom() + GAP), bottom.max);
+        let rest = Rect::from_min_max(pos2(area.left(), r_loop.bottom() + GAP), area.max);
         self.pads(ui, i, rest, rh, font);
+    }
+
+    /// on-screen buttons or only screens: Settings → Decks (auto = screens while a controller is connected)
+    fn screens(&self) -> bool {
+        match self.app.store.settings.deck_view.as_str() { "screens" => true, "controls" => false, _ => !self.app.midi_io.name.is_empty() }
+    }
+
+    /// a deck played from the controller: the screen fills the deck, with the hot cues (click to jump) and
+    /// the pad mode and loop under it
+    fn deck_display(&mut self, ui: &mut Ui, i: usize, inner: Rect) {
+        let col = deck_color(i);
+        let rh = if inner.height() > 200.0 { 24.0 } else { 18.0 };
+        let font = if rh > 20.0 { 11.5 } else { 10.0 };
+        let screen = Rect::from_min_max(inner.min, pos2(inner.right(), inner.bottom() - 2.0 * rh - 2.0 * GAP));
+        self.deck_screen(ui, i, screen, i % 2 == 0);
+        let r_hot = Rect::from_min_size(pos2(inner.left(), screen.bottom() + GAP), vec2(inner.width(), rh));
+        {
+            let ui = &mut row_ui(ui, r_hot);
+            let u = (inner.width() - 7.0 * GAP) / 8.0;
+            for k in 0..8 {
+                let set = self.app.decks[i].hot[k].is_some();
+                let r = button(ui, &((b'A' + k as u8) as char).to_string(), vec2(u, rh), set, col, font).on_hover_text("Hot cue: click to jump (or set it here)");
+                if r.clicked() { self.app.decks[i].hotcue(k); }
+            }
+        }
+        let r_st = Rect::from_min_size(pos2(inner.left(), r_hot.bottom() + GAP), vec2(inner.width(), rh));
+        let p = ui.painter();
+        p.rect_filled(r_st, 4.0, Color32::from_rgb(0x07, 0x09, 0x0c));
+        let d = &self.app.decks[i];
+        let mode = match d.pad_mode { PadMode::HotCue => "HOT CUE", PadMode::BeatLoop => "BEAT LOOP", PadMode::BeatJump => "BEAT JUMP", PadMode::PadFx => "PAD FX 1", PadMode::PadFx2 => "PAD FX 2" };
+        p.text(pos2(r_st.left() + 8.0, r_st.center().y), egui::Align2::LEFT_CENTER, mode, bold(font), col);
+        let lp = match (d.lp.a, d.lp.b) { (None, _) => String::new(), (Some(_), None) => "LOOP IN…".into(), _ => format!("LOOP {}{}", frac_text(d.loop_beats()), if d.lp.on { "" } else { " (off)" }) };
+        if !lp.is_empty() { p.text(r_st.center(), egui::Align2::CENTER_CENTER, lp, bold(font), if d.lp.on { LOOP } else { MUTED }); }
+        let q = format!("{}{}", if d.quant { "Q " } else { "" }, if self.app.ui.grid_open[i] { "GRID" } else { "" });
+        p.text(pos2(r_st.right() - 8.0, r_st.center().y), egui::Align2::RIGHT_CENTER, q, bold(font), MUTED);
+    }
+
+    /// the deck's screen: a small platter (drag to scratch) on the outside, then time, key and BPM in big
+    /// numbers, with the tempo, the sync state and a beat / phrase counter under them
+    fn deck_screen(&mut self, ui: &mut Ui, i: usize, r: Rect, platter_left: bool) {
+        let col = deck_color(i);
+        ui.painter().rect_filled(r, 5.0, Color32::from_rgb(0x07, 0x09, 0x0c));
+        ui.painter().rect_stroke(r, 5.0, Stroke::new(1.0_f32, LINE), StrokeKind::Inside);
+        let jd = (r.height() - 12.0).min(r.width() * 0.3).max(40.0);
+        let jr = if platter_left { Rect::from_min_size(pos2(r.left() + 6.0, r.center().y - jd / 2.0), vec2(jd, jd)) }
+            else { Rect::from_min_size(pos2(r.right() - 6.0 - jd, r.center().y - jd / 2.0), vec2(jd, jd)) };
+        self.jog(ui, i, jr);
+        let text = if platter_left { Rect::from_min_max(pos2(jr.right() + 10.0, r.top() + 6.0), pos2(r.right() - 10.0, r.bottom() - 6.0)) }
+            else { Rect::from_min_max(pos2(r.left() + 10.0, r.top() + 6.0), pos2(jr.left() - 10.0, r.bottom() - 6.0)) };
+        let p = ui.painter().with_clip_rect(text);
+        let d = &self.app.decks[i];
+        let loaded = d.loaded();
+        let t = d.now();
+        let big = (text.height() * 0.3).min(text.width() * 0.4 / 5.0).clamp(14.0, 30.0);
+        let small = (big * 0.45).clamp(9.5, 12.0);
+        let lab = |x: f32, y: f32, s: &str, a: egui::Align2| { p.text(pos2(x, y), a, s, bold(small - 1.0), DIM); };
+        // three columns: TIME | KEY | BPM
+        let cw = text.width() * 0.2;
+        let (c0, c1, c2) = (text.left(), text.left() + text.width() * 0.4, text.right());
+        let y_lab = text.top();
+        let y_big = y_lab + small + 2.0;
+        lab(c0, y_lab, "REMAIN", egui::Align2::LEFT_TOP);
+        lab(c1 + cw / 2.0, y_lab, "KEY", egui::Align2::CENTER_TOP);
+        lab(c2, y_lab, "BPM", egui::Align2::RIGHT_TOP);
+        let fg = if loaded { FG } else { DIM };
+        let remain = if loaded { format!("-{}", fmt_time(d.duration - t)) } else { "-:--.-".into() };
+        let near_end = loaded && d.duration - t < 30.0;
+        p.text(pos2(c0, y_big), egui::Align2::LEFT_TOP, remain, mono(big), if near_end { RED } else { fg });
+        let key = if loaded { camelot(d.key_now()) } else { None };
+        match key {
+            Some(c) => { p.text(pos2(c1 + cw / 2.0, y_big), egui::Align2::CENTER_TOP, c.label(), bold(big), rgb(c.color())); }
+            None => { p.text(pos2(c1 + cw / 2.0, y_big), egui::Align2::CENTER_TOP, "--", bold(big), DIM); }
+        }
+        let bpm = if loaded && d.bpm() > 0.0 { format!("{:.1}", d.eff_bpm()) } else { "---.-".into() };
+        p.text(pos2(c2, y_big), egui::Align2::RIGHT_TOP, bpm, mono(big), fg);
+        // second line: elapsed | flags | tempo
+        let y2 = y_big + big + 4.0;
+        if loaded { p.text(pos2(c0, y2), egui::Align2::LEFT_TOP, fmt_time(t), mono(small), MUTED); }
+        let rg = d.range();
+        let tempo = format!("{:+.2}% {}", (d.rate() - 1.0) * 100.0, if rg == 100.0 { "W".into() } else { format!("±{rg}") });
+        p.text(pos2(c2, y2), egui::Align2::RIGHT_TOP, tempo, mono(small), if d.pitch.abs() < 1e-6 { MUTED } else { FG });
+        let master = self.app.tempo_master() == Some(i);
+        let flags: Vec<(&str, Color32)> = [(master, "MASTER", CUE), (d.sync, "SYNC", col), (d.mt, "MT", col)].into_iter().filter(|f| f.0).map(|f| (f.1, f.2)).collect();
+        let mut fx = c1 + cw / 2.0 - flags.iter().map(|f| f.0.len() as f32 * small * 0.62 + 6.0).sum::<f32>() / 2.0;
+        for (s, c) in flags {
+            let g = p.layout_no_wrap(s.to_string(), bold(small - 1.0), c);
+            let gw = g.size().x;
+            p.galley(pos2(fx, y2), g, c);
+            fx += gw + 6.0;
+        }
+        // bottom line: beat dots, bar.beat, phrase
+        let y3 = text.bottom() - small;
+        if loaded && d.ana.is_some() && y3 > y2 + small + 2.0 {
+            let b = d.beat_at(t).floor();
+            let beat = b.rem_euclid(4.0) as i32;
+            let mut x = c0 + 4.0;
+            for k in 0..4 {
+                let on = k == beat;
+                p.rect_filled(Rect::from_center_size(pos2(x + 6.0, y3 + small / 2.0), vec2(12.0, 6.0)), 1.5, if on { if k == 0 { RED } else { col } } else { LINE2 });
+                x += 16.0;
+            }
+            let bar = (b / 4.0).floor() as i64 + 1;
+            p.text(pos2(x + 4.0, y3 + small / 2.0), egui::Align2::LEFT_CENTER, format!("{}.{}", bar.max(0), beat + 1), mono(small), MUTED);
+            if let Some((s, _e, bars, label, barlen)) = d.phrase_spans().into_iter().find(|ps| t >= ps.0 && t < ps.1) {
+                let n = (((t - s) / barlen).floor() as u32 + 1).min(bars);
+                p.text(pos2(c2, y3 + small / 2.0), egui::Align2::RIGHT_CENTER, format!("{} {}/{}", label.to_uppercase(), n, bars), bold(small), rgb(crate::analysis::phrase_color(&label)));
+            }
+        }
     }
 
     /// four decks: the same controls squeezed into half the height; jog on the outside, buttons and pads inside
@@ -425,12 +522,13 @@ impl Gui {
         let d = &self.app.decks[i];
         let cue_lit = d.loaded() && (d.previewing || (d.now() - d.cue).abs() < 0.03);
         let playing = d.playing;
-        let r = { let u = &mut ui.new_child(UiBuilder::new().max_rect(cue_r)); round_button(u, "CUE", cb, cue_lit, CUE) };
+        let wide = cue_r.width() > cue_r.height() * 1.5;
+        let r = { let u = &mut ui.new_child(UiBuilder::new().max_rect(cue_r)); if wide { button(u, "CUE", cue_r.size(), cue_lit, CUE, 15.0) } else { round_button(u, "CUE", cb, cue_lit, CUE) } };
         if !self.learn(ui, &r, "cue", i as i8) {
             if r.is_pointer_button_down_on() && ui.input(|x| x.pointer.any_pressed()) { self.app.decks[i].cue_down(); }
             if r.drag_stopped() || r.clicked() { self.app.decks[i].cue_up(); }
         }
-        let r = { let u = &mut ui.new_child(UiBuilder::new().max_rect(play_r)); round_button(u, if playing { "❚❚" } else { "▶" }, cb, playing, GREEN) };
+        let r = { let u = &mut ui.new_child(UiBuilder::new().max_rect(play_r)); let l = if playing { "❚❚" } else { "▶" }; if wide { button(u, l, play_r.size(), playing, GREEN, 17.0) } else { round_button(u, l, cb, playing, GREEN) } };
         if !self.learn(ui, &r, "play", i as i8) && r.clicked() { self.app.toggle_play(i); }
     }
     /// the loop's length in beats (outlined while it's on)
@@ -1035,6 +1133,12 @@ impl Gui {
                     self.app.store.settings.bpm_hi = h - 1.0;
                     if done { self.app.set_bpm_range(custom); }
                 }
+                let mut dv = self.app.store.settings.deck_view.clone();
+                let dv_name = |v: &str| match v { "screens" => "Screens only", "controls" => "Buttons", _ => "Auto (screens while a controller is connected)" };
+                egui::ComboBox::from_label("Decks").selected_text(dv_name(&dv)).show_ui(ui, |ui| {
+                    for v in ["auto", "screens", "controls"] { ui.selectable_value(&mut dv, v.to_string(), dv_name(v)); }
+                });
+                if dv != self.app.store.settings.deck_view { self.app.store.settings.deck_view = dv; self.app.store.dirty_settings = true; }
                 let mut ws = self.app.store.settings.wave_style.clone();
                 egui::ComboBox::from_label("Waveform").selected_text(if ws == "3band" { "3-band" } else { "RGB (red lows, green mids, blue highs)" }).show_ui(ui, |ui| {
                     ui.selectable_value(&mut ws, "rgb".to_string(), "RGB (red lows, green mids, blue highs)");
@@ -1531,7 +1635,13 @@ impl eframe::App for Gui {
             let (wave, browse) = (s.wave, s.browse);
             // the deck row keeps its size; dragging the library's top edge trades height between the
             // waveforms and the library (double-click: back to automatic)
-            let row_h = if four { (full.height() * 0.46).clamp(300.0, 440.0) } else { (full.height() * 0.47).clamp(260.0, 400.0) };
+            // screen-only decks need less height than buttons: the waveforms get the rest
+            let row_h = match (four, self.screens()) {
+                (true, false) => (full.height() * 0.46).clamp(300.0, 440.0),
+                (true, true) => (full.height() * 0.42).clamp(280.0, 400.0),
+                (false, false) => (full.height() * 0.47).clamp(260.0, 400.0),
+                (false, true) => (full.height() * 0.42).clamp(280.0, 360.0),
+            };
             let lib_h = s.lib_h;
             // ---- the waveforms, stacked 1 2 (3 4)
             let lane_h = if wave { (full.height() - (n - 1.0) * GAP) / n }

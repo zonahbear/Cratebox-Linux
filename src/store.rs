@@ -17,6 +17,8 @@ pub struct Settings {
     /// the custom BPM range (bpm_range == analysis::BPM_CUSTOM)
     pub bpm_lo: f64,
     pub bpm_hi: f64,
+    /// deck area: "auto" (screens while a controller is connected), "screens" or "controls"
+    pub deck_view: String,
     pub wave_style: String,
     pub spin: f64,
     /// master tempo per deck (a list, so older two-deck settings files still load)
@@ -63,7 +65,7 @@ pub struct Settings {
 impl Default for Settings {
     fn default() -> Self {
         Settings {
-            folders: vec![], devices: vec![], bpm_range: 3, bpm_lo: 70.0, bpm_hi: 180.0, wave_style: "rgb".into(), spin: 2.5, mt: vec![true; 4], four: false, wave: false,
+            folders: vec![], devices: vec![], bpm_range: 3, bpm_lo: 70.0, bpm_hi: 180.0, deck_view: "auto".into(), wave_style: "rgb".into(), spin: 2.5, mt: vec![true; 4], four: false, wave: false,
             bfx_fx: "ECHO".into(), bfx_depth: 0.55, bfx_ch: 0, bfx_beats: HashMap::new(), rec_dir: String::new(),
             heat_curves: HashMap::new(), heat_last: crate::heat::DEFAULT_NAME.into(), heat_hold_f: 500.0, heat_puff_full: 0.0, heat_device: String::new(), heat_models: HashMap::new(), zoom: 8.0, lib_h: 0.0, tree_w: 0.0, browse: false,
             out_device: String::new(), hp_mode: "auto".into(), hp_device: String::new(), midi_in: String::new(), profile_for: HashMap::new(),
