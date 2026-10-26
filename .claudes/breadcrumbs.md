@@ -61,3 +61,4 @@
 ## 2026-10-26 19:20Z
 - PR #7 merged (c53e7bc); cratebox-os run 6 rebuilt kiosk-latest with the 4-deck app. Next: Jonah tests on the MacBook (FLX4, trackpad scroll sign, HEAT over BlueZ).
 - 2026-10-26 19:50Z: library divider now trades height with the waveforms (deck row fixed); BPM range 70-180 + Custom (settings bpm_lo/bpm_hi, analysis::custom_range). Same range on iOS #26 and web Cratebox.
+- 2026-10-26 20:10Z: XDJ deck screens (deck_screen/deck_display, Settings → Decks auto/screens/buttons), HEAT BlueZ agent + heat.log + clearer connect errors. Jonah: Puffco listed but would not connect on live boot (no error text yet). Distro asks (Claude desktop, plymouth logo, minimal-install, Kaby Lake tweaks) handed to the distro thread.

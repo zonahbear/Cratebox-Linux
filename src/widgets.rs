@@ -29,7 +29,8 @@ pub fn prop(size: f32) -> FontId { FontId::proportional(size) }
 pub fn bold(size: f32) -> FontId { FontId::new(size, egui::FontFamily::Name("bold".into())) }
 
 pub fn fmt_time(s: f64) -> String {
-    let s = if s.is_finite() && s > 0.0 { s } else { 0.0 };
+    // tenths first, so 59.96 reads 1:00.0 and not 0:60.0
+    let s = if s.is_finite() && s > 0.0 { (s * 10.0).round() / 10.0 } else { 0.0 };
     let m = (s / 60.0).floor();
     format!("{}:{:04.1}", m as i64, s - m * 60.0)
 }

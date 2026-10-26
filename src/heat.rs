@@ -408,10 +408,32 @@ mod bluez {
     fn strs(v: Option<&OwnedValue>) -> Vec<String> { v.and_then(|v| v.try_clone().ok()).and_then(|v| Vec::<String>::try_from(v).ok()).unwrap_or_default() }
     fn err(e: impl std::fmt::Display) -> String { e.to_string() }
 
+    /// our own pairing agent: the kiosk session has no desktop one, and a Puffco pairs "just works", so every
+    /// question gets yes. BlueZ asks the agent of whoever called Pair, which is us.
+    struct Agent;
+    #[zbus::interface(name = "org.bluez.Agent1")]
+    impl Agent {
+        fn release(&self) {}
+        fn request_pin_code(&self, _d: OwnedObjectPath) -> String { "0000".into() }
+        fn display_pin_code(&self, _d: OwnedObjectPath, _pin: String) {}
+        fn request_passkey(&self, _d: OwnedObjectPath) -> u32 { 0 }
+        fn display_passkey(&self, _d: OwnedObjectPath, _key: u32, _entered: u16) {}
+        fn request_confirmation(&self, _d: OwnedObjectPath, _key: u32) {}
+        fn request_authorization(&self, _d: OwnedObjectPath) {}
+        fn authorize_service(&self, _d: OwnedObjectPath, _uuid: String) {}
+        fn cancel(&self) {}
+    }
+    const AGENT: &str = "/org/cratebox/agent";
+
     impl Bus {
         pub fn new() -> Result<Bus, String> {
             let conn = zbus::blocking::connection::Builder::system().map_err(err)?.method_timeout(Duration::from_secs(25)).build()
                 .map_err(|e| format!("can't reach the Bluetooth service ({e})"))?;
+            if conn.object_server().at(AGENT, Agent).is_ok() {
+                if let Ok(m) = Proxy::new(&conn, "org.bluez", "/org/bluez", "org.bluez.AgentManager1") {
+                    let _: Result<(), _> = m.call("RegisterAgent", &(zbus::zvariant::ObjectPath::try_from(AGENT).unwrap(), "NoInputNoOutput"));
+                }
+            }
             let mut bus = Bus { conn, adapter: OwnedObjectPath::try_from("/").unwrap() };
             let objs = bus.objects()?;
             let mut ads: Vec<&OwnedObjectPath> = objs.iter().filter(|(_, i)| i.contains_key("org.bluez.Adapter1")).map(|(p, _)| p).collect();
@@ -487,14 +509,24 @@ mod bluez {
                 })();
                 match r {
                     Ok(()) => break,
-                    Err(e) => { let _: Result<(), _> = dev.call("Disconnect", &()); if i == 3 { return Err(e); } std::thread::sleep(Duration::from_millis(800 * i)); }
+                    Err(e) => {
+                        let _: Result<(), _> = dev.call("Disconnect", &());
+                        if i == 3 { return Err(connect_hint(&e)); }
+                        say(&format!("Connecting… (try {} of 3: {e})", i + 1));
+                        std::thread::sleep(Duration::from_millis(800 * i));
+                    }
                 }
             }
             let (cmd, reply, version, flags) = chars.ok_or("no Lorax service")?;
+            let mut pair_err: Option<String> = None;
             // a Puffco wants a bond; BlueZ pairs "just works" devices without asking, or the desktop's agent asks
             if !dev.get_property::<bool>("Paired").unwrap_or(false) {
-                say("Pairing… (accept the prompt if one comes up)");
-                let _: Result<(), _> = dev.call("Pair", &());
+                say("Pairing…");
+                if let Err(e) = dev.call::<_, _, ()>("Pair", &()) {
+                    let e = e.to_string();
+                    // already paired from the other side is fine; anything else is worth knowing about
+                    if !e.contains("AlreadyExists") { pair_err = Some(e); }
+                }
             }
             let _ = Proxy::new(&bus.conn, "org.bluez", seen.path.clone(), "org.freedesktop.DBus.Properties")
                 .and_then(|p| p.call::<_, _, ()>("Set", &(DEV, "Trusted", Value::from(true))));
@@ -530,7 +562,9 @@ mod bluez {
             }
             if why != "ok" {
                 me.disconnect();
-                return Err(if auth_problem(&why) { "pair the device in the Bluetooth settings first".into() } else { format!("handshake failed ({why}); is the Puffco app connected to it?") });
+                let pe = pair_err.map(|e| format!(" Pairing said: {e}.")).unwrap_or_default();
+                return Err(if auth_problem(&why) { format!("it wouldn't pair ({why}).{pe} Forget it in Bluetooth settings (or `bluetoothctl remove {}`), wake it and try again", seen.addr) }
+                    else { format!("handshake failed ({why}).{pe} Close the Puffco app (and Cratebox HEAT on your phone): a Puffco talks to one thing at a time") });
             }
             let b = me.read(&lorax::p_temp(0), 4);
             me.fmt = lorax::detect_format(b.as_deref(), is_proxy);
@@ -572,6 +606,13 @@ mod bluez {
         }
         fn read(&mut self, path: &str, max: u16) -> Option<Vec<u8>> { match self.send(16, &lorax::read_payload(path, max), 3.0) { Ok((0, d)) => Some(d), _ => None } }
         fn write(&mut self, path: &str, bytes: &[u8]) -> bool { matches!(self.send(17, &lorax::write_payload(path, bytes), 3.0), Ok((0, _))) }
+    }
+    /// a failed Connect, in words: the usual cause is another phone or app holding the Puffco
+    fn connect_hint(e: &str) -> String {
+        let l = e.to_lowercase();
+        if l.contains("abort") || l.contains("timeout") || l.contains("didn't answer") || l.contains("in progress") {
+            format!("{e}. If your phone's Puffco app (or Cratebox HEAT) is connected to it, close that first, then wake the Puffco and try again")
+        } else { e.to_string() }
     }
     /// the device's Lorax characteristics: (command, reply, version, command flags)
     fn find_chars(bus: &Bus, dev: &str) -> Result<(String, String, Option<String>, Vec<String>), String> {
@@ -767,7 +808,13 @@ fn f0(v: Option<f64>) -> String { v.map(|v| format!("{}", v.round() as i64)).unw
 
 impl Worker {
     fn now(&self) -> f64 { self.t0.elapsed().as_secs_f64() }
-    fn say(&mut self, m: &str) { self.msg = m.to_string(); self.render(); }
+    fn say(&mut self, m: &str) {
+        self.msg = m.to_string(); self.render();
+        // heat.log in the data folder: what HEAT said, for when a connect goes wrong on the real thing
+        use std::io::Write;
+        let secs = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);
+        if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(crate::store::data_dir().join("heat.log")) { let _ = writeln!(f, "{secs} {m}"); }
+    }
     fn render(&mut self) {
         let label = match self.phase {
             Phase::Idle => "HEAT".to_string(),
