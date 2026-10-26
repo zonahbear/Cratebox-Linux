@@ -34,6 +34,7 @@ The FLX4's sound card has four outputs: 1–2 go to the speakers (MASTER), 3–4
 - **If that device is busy:** PipeWire or PulseAudio is holding the FLX4. Either set the FLX4's profile to *Off* in your sound settings (pavucontrol → Configuration, or GNOME/KDE sound settings) so Cratebox can have it, or set it to *Pro Audio* and pick it through the `pipewire` device.
 - **No FLX4 sound card?** Use **Split** (master in the left ear, cue in the right, with a splitter cable) or **Another device** (headphones on a second sound card).
 - **Test cue** in the header beeps in the headphone mix only: if you hear it on the speakers, cueing isn't separated yet.
+- **After sleep or a lost device:** if the output stops being called for a second (for example PipeWire restarting after a wake), Cratebox closes it and reopens the same device every 2 seconds until it works. The status line says "Reconnecting…" and then "Sound reconnected".
 - **Realtime:** the audio thread asks for realtime priority (SCHED_FIFO 70), so the sound keeps going while the window or the analysis is busy. That needs an rtprio limit of 70 or more for your user (Cratebox OS sets one; elsewhere add e.g. `@audio - rtprio 70` to `/etc/security/limits.d/` and log in again). Without it Cratebox says so on the terminal and runs at normal priority.
 - **Audio buffer** (Settings → Sound): 256 samples (about 5 ms) is the default. Go lower for a tighter jog feel, higher if you hear crackles.
 

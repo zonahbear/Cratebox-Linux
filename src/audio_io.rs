@@ -7,7 +7,7 @@ use crate::engine::Engine;
 use crate::ring::{ring, Consumer};
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use cpal::{SampleFormat, SampleRate, StreamConfig};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
@@ -69,13 +69,14 @@ fn pick_config(dev: &cpal::Device, rate: Option<u32>, want_ch: u16, buffer: u32)
     Ok((d.config(), d.sample_format()))
 }
 
-fn build<T>(dev: &cpal::Device, cfg: &StreamConfig, mut fill: impl FnMut(&mut [f32]) + Send + 'static, err: Arc<Mutex<Option<String>>>) -> Result<cpal::Stream, String>
+fn build<T>(dev: &cpal::Device, cfg: &StreamConfig, mut fill: impl FnMut(&mut [f32]) + Send + 'static, err: Arc<Mutex<Option<String>>>, beat: Arc<AtomicU64>) -> Result<cpal::Stream, String>
 where T: cpal::SizedSample + cpal::FromSample<f32> {
     let mut scratch: Vec<f32> = Vec::with_capacity(16384);
     let e2 = err.clone();
     let mut promoted = false;
     dev.build_output_stream::<T, _, _>(cfg, move |data: &mut [T], _| {
         if !promoted { promoted = true; promote_to_realtime(); }
+        beat.fetch_add(1, Ordering::Relaxed);
         if scratch.len() < data.len() { scratch.resize(data.len(), 0.0); }
         let s = &mut scratch[..data.len()];
         fill(s);
@@ -96,15 +97,30 @@ fn promote_to_realtime() {
     }
 }
 
-fn open_stream(dev: &cpal::Device, cfg: &StreamConfig, fmt: SampleFormat, fill: impl FnMut(&mut [f32]) + Send + 'static, err: Arc<Mutex<Option<String>>>) -> Result<cpal::Stream, String> {
+fn open_stream(dev: &cpal::Device, cfg: &StreamConfig, fmt: SampleFormat, fill: impl FnMut(&mut [f32]) + Send + 'static, err: Arc<Mutex<Option<String>>>, beat: Arc<AtomicU64>) -> Result<cpal::Stream, String> {
     let s = match fmt {
-        SampleFormat::F32 => build::<f32>(dev, cfg, fill, err)?,
-        SampleFormat::I16 => build::<i16>(dev, cfg, fill, err)?,
-        SampleFormat::I32 => build::<i32>(dev, cfg, fill, err)?,
+        SampleFormat::F32 => build::<f32>(dev, cfg, fill, err, beat)?,
+        SampleFormat::I16 => build::<i16>(dev, cfg, fill, err, beat)?,
+        SampleFormat::I32 => build::<i32>(dev, cfg, fill, err, beat)?,
         f => return Err(format!("unsupported sample format {f:?}")),
     };
     s.play().map_err(|e| e.to_string())?;
     Ok(s)
+}
+
+/// Counts a stream's callbacks so the UI thread can tell when it has stopped being called (after a
+/// sleep/wake the PipeWire connection can die without the stream ever reporting an error).
+struct Beat { n: Arc<AtomicU64>, seen: u64, at: Instant }
+
+impl Beat {
+    fn new() -> Beat { Beat { n: Arc::new(AtomicU64::new(0)), seen: 0, at: Instant::now() } }
+    fn reset(&mut self) { self.seen = self.n.load(Ordering::Relaxed); self.at = Instant::now(); }
+    /// true once the count hasn't moved for `limit`
+    fn stale(&mut self, limit: Duration) -> bool {
+        let n = self.n.load(Ordering::Relaxed);
+        if n != self.seen { self.seen = n; self.at = Instant::now(); return false; }
+        self.at.elapsed() > limit
+    }
 }
 
 pub struct AudioIo {
@@ -118,6 +134,8 @@ pub struct AudioIo {
     null_stop: Arc<AtomicBool>,
     null_thread: Option<JoinHandle<()>>,
     pub error: Arc<Mutex<Option<String>>>,
+    beat: Beat,
+    hp_beat: Beat,
 }
 
 fn render_into(engine: &SharedEngine, out: &mut [f32], ch: usize) {
@@ -136,7 +154,7 @@ impl AudioIo {
         48000
     }
     pub fn new(engine: SharedEngine, sr: f64) -> AudioIo {
-        AudioIo { engine, sr, channels: 2, device: String::new(), stream: None, hp_stream: None, hp_device: String::new(), null_stop: Arc::new(AtomicBool::new(true)), null_thread: None, error: Arc::new(Mutex::new(None)) }
+        AudioIo { engine, sr, channels: 2, device: String::new(), stream: None, hp_stream: None, hp_device: String::new(), null_stop: Arc::new(AtomicBool::new(true)), null_thread: None, error: Arc::new(Mutex::new(None)), beat: Beat::new(), hp_beat: Beat::new() }
     }
     pub fn running(&self) -> bool { self.stream.is_some() }
 
@@ -150,11 +168,11 @@ impl AudioIo {
             let (cfg, fmt) = pick_config(&dev, Some(self.sr as u32), 4, buffer)?;
             let ch = cfg.channels as usize;
             let eng = self.engine.clone();
-            let s = open_stream(&dev, &cfg, fmt, move |out| render_into(&eng, out, ch), self.error.clone())?;
+            let s = open_stream(&dev, &cfg, fmt, move |out| render_into(&eng, out, ch), self.error.clone(), self.beat.n.clone())?;
             Ok::<_, String>((s, ch))
         })();
         match res {
-            Ok((s, ch)) => { self.stream = Some(s); self.channels = ch; self.device = name.to_string(); Ok(()) }
+            Ok((s, ch)) => { self.stream = Some(s); self.beat.reset(); self.channels = ch; self.device = name.to_string(); Ok(()) }
             Err(e) => { self.start_null(); self.device = String::new(); Err(e) }
         }
     }
@@ -191,13 +209,28 @@ impl AudioIo {
         let (cfg, fmt) = pick_config(&dev, Some(self.sr as u32), 2, 0)?;
         let ch = cfg.channels as usize;
         let (prod, mut cons): (_, Consumer) = ring((self.sr * 0.5) as usize);
-        let s = open_stream(&dev, &cfg, fmt, move |out| cons.pull(out, ch), self.error.clone())?;
+        let s = open_stream(&dev, &cfg, fmt, move |out| cons.pull(out, ch), self.error.clone(), self.hp_beat.n.clone())?;
         if let Ok(mut e) = self.engine.lock() { e.hp_tap = Some(prod); }
         self.hp_stream = Some(s);
+        self.hp_beat.reset();
         self.hp_device = name.to_string();
         Ok(())
     }
     pub fn take_error(&self) -> Option<String> { self.error.lock().ok().and_then(|mut e| e.take()) }
+    /// an open stream whose callbacks stopped for over a second (dead PipeWire connection after a
+    /// wake, device gone): the caller closes and reopens. Suspend itself doesn't count, the
+    /// monotonic clock stops while the machine sleeps.
+    pub fn stalled(&mut self) -> bool {
+        let limit = Duration::from_secs(1);
+        (self.stream.is_some() && self.beat.stale(limit)) | (self.hp_stream.is_some() && self.hp_beat.stale(limit))
+    }
+    /// drop both streams and keep the decks moving on the timer until a reopen works
+    pub fn close(&mut self) {
+        self.hp_stream = None;
+        if let Ok(mut e) = self.engine.lock() { e.hp_tap = None; }
+        self.stream = None;
+        self.start_null();
+    }
 }
 
 impl Drop for AudioIo {
