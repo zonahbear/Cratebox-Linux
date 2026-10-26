@@ -2,8 +2,9 @@
 
 A Lubuntu 26.04 LTS live/install ISO that boots straight into Cratebox, full screen. Audio comes
 first, and it is built for the 12-inch MacBook (model A1534, MacBook10,1 / 2017; MacBook9,1 should
-behave the same). It also runs on other x86-64-v3 PCs. **Nicotine+** (Soulseek) and **Google Chrome**
-are on it too.
+behave the same). It also runs on other x86-64-v3 PCs. **Nicotine+** (Soulseek), **Google Chrome** and
+the **Claude desktop app** (Anthropic's official Linux beta) are on it too. It boots with a Cratebox
+splash.
 
 The MacBook settings come from what was tested on Jonah's MacBook10,1 (Lubuntu 26.04, kernel
 7.0.0-30). The table below says which parts were **verified** on that machine and which are only
@@ -44,9 +45,15 @@ From Linux there is an untested fallback:
 - **Desktop (Soulseek, Chrome, Wi-Fi):** quit Cratebox with **Alt+F4** or **Ctrl+Alt+Q** and the
   Lubuntu desktop starts in the same session. On the live stick you get the normal "Try / Install"
   prompt. To get back to Cratebox, use its menu entry (opens in a window) or reboot.
-- **Install:** from the desktop, choose Install, and pick the **normal** installation, not minimal
-  (minimal leaves out everything Cratebox OS adds). The installer turns on automatic login, so every
-  boot lands in the Cratebox session. The login screen also lists *Lubuntu*.
+- **Install:** from the desktop, choose Install. **Normal** or **Minimal** both give you everything
+  Cratebox OS adds; Minimal then takes out Lubuntu's extra apps (office, media players and so on) at
+  the end of the install. The installer turns on automatic login, so every boot lands in the Cratebox
+  session. The login screen also lists *Lubuntu*.
+- **Claude:** in the desktop menu. Sign in with your Claude account. Updates come with the system's
+  apt updates (Anthropic's repo is registered). Cowork needs hardware virtualization on (it is on a
+  MacBook); users are put in the `kvm` group for it.
+- **Boot menu:** the stick waits 3 s on its menu; the installed system doesn't show one (hold **Esc**
+  at power-on to get it, e.g. for an older kernel).
 - **Sleep:** s2idle only (see below). Closing the lid is fine, but shut down before a long stretch
   on battery, because s2idle drains more than deep sleep.
 
@@ -75,6 +82,18 @@ From Linux there is an untested fallback:
 | **performance** power profile while Cratebox is open, restored when it closes. thermald stays on | The CPU ramps up fast for load bursts. HDA power saving is left exactly as stock (brief rule) |
 | Kiosk session runs openbox only, with no panel, compositor or applets; screen blanking is off | Less running next to the audio |
 | No snapd, Firefox snap or LibreOffice; Chrome is the one browser | Lighter |
+| `threadirqs` (interrupt handlers as threads, as Ubuntu Studio does) and `nowatchdog` | IRQ work can be scheduled around the audio threads; no NMI watchdog ticking |
+| No automatic apt runs (`apt-daily*` timers off), no CUPS, ModemManager, kerneloops, whoopsie or apport | Nothing kicks off in the background mid-set. Update by hand: `sudo apt update && sudo apt upgrade` |
+| Intel VA-API driver (`intel-media-va-driver-non-free`) | Chrome and Claude decode video on the GPU, not the 4.5 W CPU (less heat, less throttling) |
+| zram swap (half the RAM, zstd), swappiness left at the default | Memory pressure swaps to RAM, not the SSD. A higher swappiness would page out decoded tracks |
+
+**Faster boot** (proposed): the stick's boot menu waits 3 s instead of 30; the installed system's
+GRUB menu is hidden with no timeout, including after an unclean shutdown (`GRUB_RECORDFAIL_TIMEOUT=0`);
+NetworkManager-wait-online is off, so the session doesn't wait for Wi-Fi.
+
+**Bluetooth for HEAT:** Bluetooth works with the stock drivers (Jonah). `JustWorksRepairing = always`
+in `/etc/bluetooth/main.conf`, so a Puffco that dropped its bond pairs again without a prompt, and
+users are in the `bluetooth` group.
 
 Wi-Fi (Broadcom BCM4350, `brcmfmac`) uses Ubuntu's own firmware. The display runs at 2x (DPI 192,
 `GDK_SCALE=2`, `GDK_DPI_SCALE=0.5`) on the 2304×1440 panel, which gives Cratebox 1152×720 points.
@@ -94,10 +113,14 @@ Then play through the speakers after a **warm reboot** and after a **cold boot**
 
 ## Not done
 
-- FaceTime HD camera driver, VA-API and hibernation are left out,
-  to keep this scoped. Bluetooth works with the stock drivers (Jonah, 2026-10-26).
+- FaceTime HD camera driver and hibernation are left out, to keep this scoped.
+- Not done for boot time: a host-only or lz4 initramfs. It would load faster, but a wrong host-only
+  guess leaves the machine unbootable, so it waits for a timed boot on the MacBook first.
+- Kept on purpose: CPU vulnerability mitigations (turning them off is faster on Kaby Lake but not
+  safe on a machine that browses), and the i915 GuC/HuC firmware defaults.
 - MacBook8,1 (2015) isn't supported by the speaker driver.
-- The ISO contains Chrome, whose licence doesn't allow passing it around, so keep the release private.
+- The ISO contains Chrome and the Claude desktop app, whose licences don't allow passing them around, so
+  keep the release private.
 
 ## Updating the kernel later
 

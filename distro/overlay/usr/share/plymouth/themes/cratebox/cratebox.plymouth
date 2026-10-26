@@ -1,0 +1,58 @@
+[Plymouth Theme]
+Name=Cratebox
+Description=Cratebox OS boot splash: the jog wheel turning, CRATEBOX at the bottom (distro/plymouth/make-theme.py draws the images)
+ModuleName=two-step
+
+[two-step]
+Font=Sans 12
+TitleFont=Sans 30
+ImageDir=/usr/share/plymouth/themes/cratebox
+DialogHorizontalAlignment=.5
+DialogVerticalAlignment=.7
+TitleHorizontalAlignment=.5
+TitleVerticalAlignment=.382
+HorizontalAlignment=.5
+VerticalAlignment=.5
+WatermarkHorizontalAlignment=.5
+WatermarkVerticalAlignment=.92
+Transition=none
+TransitionDuration=0.0
+BackgroundStartColor=0x0b0d10
+BackgroundEndColor=0x0b0d10
+ProgressBarBackgroundColor=0x14171c
+ProgressBarForegroundColor=0x39a7ff
+DialogClearsFirmwareBackground=true
+MessageBelowAnimation=true
+
+[boot-up]
+UseEndAnimation=false
+UseFirmwareBackground=false
+
+[shutdown]
+UseEndAnimation=false
+UseFirmwareBackground=false
+
+[reboot]
+UseEndAnimation=false
+UseFirmwareBackground=false
+
+[updates]
+SuppressMessages=true
+ProgressBarShowPercentComplete=true
+UseProgressBar=true
+_Title=Installing updates...
+_SubTitle=Do not turn off your computer
+
+[system-upgrade]
+SuppressMessages=true
+ProgressBarShowPercentComplete=true
+UseProgressBar=true
+_Title=Upgrading the system...
+_SubTitle=Do not turn off your computer
+
+[firmware-upgrade]
+SuppressMessages=true
+ProgressBarShowPercentComplete=true
+UseProgressBar=true
+_Title=Upgrading firmware...
+_SubTitle=Do not turn off your computer

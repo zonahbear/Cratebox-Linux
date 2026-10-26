@@ -55,7 +55,9 @@ build-release.sh   distributable tarball via cargo-zigbuild, glibc 2.31 baseline
 env.sh             build env for one past sandbox (points at a local ALSA shim); not needed with libasound2-dev
 distro/            Cratebox OS ISO: build-iso.sh remasters Lubuntu 26.04.1 (layered squashfs: chroot-setup.sh runs
                    in the minimal.standard layer, live-setup.sh in the live layer), overlay/ = files for the
-                   installed system, live/ = live-session script. distro/README.md = guide + verified/proposed table
+                   installed system, live/ = live-session script. distro/README.md = guide + verified/proposed table.
+                   plymouth/make-theme.py draws the boot splash PNGs (committed). Calamares "Minimal" always unpacks
+                   the full layer, then cratebox-minimal-install autoremoves Lubuntu's extras (list made in chroot-setup)
 .github/workflows/cratebox-os.yml  manual-only ubuntu job → release "kiosk-latest" (ISO in <2 GiB parts)
 ```
 
@@ -110,8 +112,8 @@ distro/            Cratebox OS ISO: build-iso.sh remasters Lubuntu 26.04.1 (laye
 ## Open work (update this when it changes)
 
 - Untested on real audio hardware and a real FLX4; HEAT's BlueZ link untested on a real Puffco (simulator only).
-- Cratebox OS: the remaster was run in a cloud session without the driver and Chrome (SKIP_THIRD_PARTY=1);
-  the full build is Actions → cratebox-os. Then on the MacBook: the checks in distro/README.md (speakers after
-  warm reboot, cold boot and sleep; headphones). The "proposed" anti-dropout settings there are unmeasured.
+- Cratebox OS: builds on Actions (cratebox-os → release kiosk-latest). On the MacBook (Jonah): live speakers work;
+  sleep/wake reconnect, a full install (normal and minimal), headphones, Claude sign-in and HEAT still to check.
+  The "proposed" settings in distro/README.md are unmeasured.
 - Behind the web app: stick playlist editing, other
   1.1.x changes. Check the web CHANGELOG against this port before claiming parity.

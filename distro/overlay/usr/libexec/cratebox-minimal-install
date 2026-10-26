@@ -1,0 +1,16 @@
+#!/bin/sh
+# Calamares runs this in the new system when "Minimal installation" is picked. Cratebox OS always
+# unpacks the full layer (that is where everything it adds lives), so minimal here means: take out
+# the Lubuntu apps a stock minimal install leaves out, and whatever only they needed. The list is
+# the stock full-minus-minimal set without Cratebox OS's own packages (chroot-setup.sh writes it),
+# and autoremove keeps anything a kept package still depends on.
+set -eu
+list=/usr/share/cratebox-os/minimal-remove.list
+installed=$(mktemp)
+dpkg-query -W -f '${db:Status-Abbrev} ${Package}\n' | awk '$1 == "ii" { print $2 }' > "$installed"
+pkgs=$(grep -Fxf "$installed" "$list" || true)
+rm -f "$installed"
+[ -n "$pkgs" ] || exit 0
+# shellcheck disable=SC2086
+apt-mark auto $pkgs >/dev/null
+DEBIAN_FRONTEND=noninteractive apt-get -y autoremove --purge
