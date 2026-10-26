@@ -47,7 +47,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           cd /mnt/work/out
-          sudo chown "$USER" cratebox-os.iso
+          sudo chown -R "$USER" .   # build-iso.sh (run as root) made this folder
           sha256sum cratebox-os.iso > cratebox-os.iso.sha256
           split -b 1900M -d cratebox-os.iso cratebox-os.iso.part-
           rm cratebox-os.iso
