@@ -1,0 +1,12 @@
+# Breadcrumbs
+
+## 2026-10-26: kiosk ISO (branch claude/project-thread-nvrvsw)
+
+- Added distro/ (Lubuntu 24.04.5 remaster: GA 6.8 kernel, leifliddy/macbook12-audio-driver via DKMS at
+  4cdfcdb, applespi modules in initramfs, Nicotine+, Chrome, kiosk session) and .github/workflows/kiosk-iso.yml.
+- `cratebox --kiosk` = fullscreen + no decorations (src/main.rs).
+- Checked by hand on the stock ISO: single casper/filesystem.squashfs (gzip), HWE 7.0 kernel, casper writes
+  SDDM autologin to lubuntu-live-environment.desktop (Exec /usr/libexec/start-lubuntu-live-env, which we divert),
+  brcmfmac43602 firmware present, kernel has CONFIG_KEYBOARD_APPLESPI=m and PREEMPT_DYNAMIC.
+- NOT run: the full build (sandbox refused to run the cloned driver scripts as root). Next: run the workflow,
+  fix whatever breaks, boot on the MacBook10,1.

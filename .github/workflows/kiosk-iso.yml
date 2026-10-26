@@ -1,0 +1,58 @@
+# Cratebox kiosk ISO (Lubuntu 24.04 remaster for the 12-inch MacBook). Manual only: one run is
+# roughly an hour of Linux minutes. The ISO is bigger than a release asset may be (2 GiB), so it is
+# uploaded in parts to the "kiosk-latest" release; join them with `cat cratebox-kiosk.iso.part-* > cratebox-kiosk.iso`.
+name: kiosk-iso
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  iso:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 150
+    env:
+      LUBUNTU_ISO: lubuntu-24.04.5-desktop-amd64.iso
+      LUBUNTU_SHA256: 303a769f681014c801844e33d7918842878067eb644e3c418d699db25f4b4bc6
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Free disk space
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
+          sudo mkdir -p /mnt/work && sudo chown "$USER" /mnt/work
+          df -h / /mnt
+
+      - name: Build Cratebox
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libasound2-dev squashfs-tools xorriso
+          cargo build --release
+          ./target/x86_64-unknown-linux-gnu/release/cratebox --version
+
+      - name: Download Lubuntu
+        run: |
+          curl -fsSL -o /mnt/work/lubuntu.iso "https://cdimage.ubuntu.com/lubuntu/releases/24.04/release/$LUBUNTU_ISO"
+          echo "$LUBUNTU_SHA256  /mnt/work/lubuntu.iso" | sha256sum -c
+
+      - name: Build the ISO
+        run: |
+          sudo distro/build-iso.sh /mnt/work/lubuntu.iso target/x86_64-unknown-linux-gnu/release/cratebox /mnt/work/out/cratebox-kiosk.iso
+          rm /mnt/work/lubuntu.iso
+
+      - name: Publish to the kiosk-latest release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          cd /mnt/work/out
+          sudo chown "$USER" cratebox-kiosk.iso
+          sha256sum cratebox-kiosk.iso > cratebox-kiosk.iso.sha256
+          split -b 1900M -d cratebox-kiosk.iso cratebox-kiosk.iso.part-
+          rm cratebox-kiosk.iso
+          gh release delete kiosk-latest --yes --cleanup-tag 2>/dev/null || true
+          gh release create kiosk-latest --prerelease --target "$GITHUB_SHA" \
+            --title "Cratebox kiosk ISO (latest build)" \
+            --notes "Built from $GITHUB_SHA. Join the parts: cat cratebox-kiosk.iso.part-* > cratebox-kiosk.iso, then check it with sha256sum -c cratebox-kiosk.iso.sha256. See distro/README.md." \
+            cratebox-kiosk.iso.part-* cratebox-kiosk.iso.sha256

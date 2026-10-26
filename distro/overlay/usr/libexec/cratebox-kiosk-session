@@ -1,0 +1,22 @@
+#!/bin/sh
+# Cratebox kiosk session: Cratebox full screen under a bare openbox (no panel, no compositor).
+# When Cratebox quits (its window closed, Alt+F4 or Ctrl+Alt+Q), the desktop given as arguments
+# starts in the same session: LXQt on an installed system, the live installer on the ISO.
+
+# 12-inch MacBook panel is 2304x1440 at 226 ppi: draw everything at 2x (Cratebox then has
+# 1152x720 points, just above its 1100x720 minimum). Other screens keep their own scale.
+w=$(xrandr --current 2>/dev/null | sed -n 's/.* connected.* \([0-9]\{1,\}\)x[0-9]\{1,\}+0+0.*/\1/p' | head -n1)
+if [ "${w:-0}" -ge 2000 ]; then
+    echo "Xft.dpi: 192" | xrdb -merge
+    export GDK_SCALE=2 GDK_DPI_SCALE=0.5
+fi
+
+xset s off -dpms
+openbox --config-file /usr/share/cratebox-kiosk/openbox-rc.xml &
+ob=$!
+cratebox --kiosk
+kill "$ob" 2>/dev/null
+wait "$ob" 2>/dev/null
+xset s on +dpms
+[ $# -gt 0 ] || set -- /usr/bin/startlxqt
+exec "$@"

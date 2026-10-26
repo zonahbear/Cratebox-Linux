@@ -1,0 +1,13 @@
+# 12-inch MacBook 2016/2017: the CS4208 driver needs its hardware amps at full, with volume done
+# in software (see the WirePlumber rule). Only runs on MacBook9,1 / MacBook10,1.
+[Unit]
+Description=Set 12-inch MacBook speaker amps to full
+After=sound.target
+ConditionPathExists=/sys/class/sound/card0
+
+[Service]
+Type=oneshot
+ExecStart=/bin/sh -c 'case "$(cat /sys/class/dmi/id/product_name)" in MacBook9,1|MacBook10,1) amixer -c 0 -q sset Master 100%% unmute ;; esac'
+
+[Install]
+WantedBy=multi-user.target

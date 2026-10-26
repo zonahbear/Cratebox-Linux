@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- openbox for the Cratebox kiosk session: no decorations, everything maximised, and two ways
+     to close Cratebox (which hands over to the desktop). -->
+<openbox_config xmlns="http://openbox.org/3.4/rc">
+  <desktops><number>1</number></desktops>
+  <keyboard>
+    <keybind key="A-F4"><action name="Close"/></keybind>
+    <keybind key="C-A-q"><action name="Close"/></keybind>
+  </keyboard>
+  <mouse/>
+  <applications>
+    <application class="*">
+      <decor>no</decor>
+      <maximized>yes</maximized>
+    </application>
+  </applications>
+</openbox_config>
