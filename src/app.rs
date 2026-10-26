@@ -656,6 +656,41 @@ impl App {
     }
 
     // ======================= decks: 4-deck mode, sync, FX =======================
+    // ======================= HEAT =======================
+    /// presets (unless a pasted curve has the same name), then the pasted ones
+    pub fn heat_names(&self) -> (Vec<String>, Vec<String>) {
+        let saved = &self.store.settings.heat_curves;
+        let mut own: Vec<String> = saved.keys().cloned().collect();
+        own.sort_by_key(|n| n.to_lowercase());
+        (crate::heat::PRESETS.iter().map(|p| p.0.to_string()).filter(|n| !saved.contains_key(n)).collect(), own)
+    }
+    pub fn heat_curve(&self, name: &str) -> crate::heat::CurveDef {
+        if let Some(c) = self.store.settings.heat_curves.get(name).filter(|c| c.points.len() >= 2) { return c.clone(); }
+        crate::heat::preset(name).unwrap_or_else(|| crate::heat::preset(crate::heat::DEFAULT_NAME).unwrap())
+    }
+    /// Start the picked curve, or Stop whatever runs
+    pub fn heat_toggle(&mut self) {
+        if self.heat.running() { self.heat.stop(); return; }
+        let name = self.store.settings.heat_last.clone();
+        let model = self.store.settings.heat_models.get(&self.heat.view.dev_id).copied().unwrap_or_default();
+        let def = self.heat_curve(&name);
+        self.heat.run(&name, def, model);
+    }
+    pub fn heat_hold(&mut self) {
+        if self.heat.running() { self.heat.stop(); return; }
+        let s = &self.store.settings;
+        self.heat.hold(s.heat_hold_f, s.heat_puff_full);
+    }
+    /// TrueCurve's "Copy curves for Cratebox" JSON
+    pub fn heat_paste(&mut self, text: &str) -> String {
+        let Some(got) = crate::heat::parse_curves(text) else { return "That isn't TrueCurve's curve list.".into() };
+        if got.is_empty() { return "No curves found in that text.".into(); }
+        let n = got.len();
+        self.store.settings.heat_curves.extend(got);
+        self.store.dirty_settings = true;
+        format!("Added {n} curve{}.", if n > 1 { "s" } else { "" })
+    }
+
     pub fn deck_active(&self, i: usize) -> bool { i < 2 || self.store.settings.four }
     pub fn four(&self) -> bool { self.store.settings.four }
     pub fn peers(&self) -> [Peer; DECKS] { std::array::from_fn(|i| self.decks[i].peer(self.deck_active(i))) }
@@ -882,6 +917,20 @@ impl App {
         while self.trash_rx.try_recv().is_ok() {} // finished-with audio buffers get freed here, not on the audio thread
         if let Some(e) = self.audio.take_error() { self.say(&format!("Sound output problem: {e}"), 8.0); }
         self.watch_output();
+        // HEAT: the worker's view, PUFF amounts into the BEAT FX unit, learned models and the device to remember
+        self.heat.poll();
+        while let Ok(e) = self.heat.events.try_recv() {
+            match e {
+                crate::heat::Event::Connected(c) => {
+                    self.fx.puff_ready = c;
+                    if !c && self.fx.fx == crate::fx::FxKind::Puff { self.fx_pick(crate::fx::FxKind::Echo); }
+                }
+                crate::heat::Event::Puff(a) => self.fx.set_puff(a),
+                crate::heat::Event::Model(id, m) => { self.store.settings.heat_models.insert(id, m); self.store.dirty_settings = true; }
+                crate::heat::Event::DeviceId(id) => { self.store.settings.heat_device = id; self.store.dirty_settings = true; }
+                crate::heat::Event::Status(s) => self.say(&s, 5.0),
+            }
+        }
         // sync follows the master's tempo and phase; FX clocks follow the decks
         for i in 0..DECKS { let p = self.peers(); self.decks[i].sync_tick(&p); self.decks[i].tick(); }
         let ck = self.clock_fn();

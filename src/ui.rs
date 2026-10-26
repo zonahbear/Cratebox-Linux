@@ -36,6 +36,9 @@ pub struct Gui {
     pub rects: std::collections::HashMap<String, Rect>,
     pub uitest: Option<crate::uitest::UiTest>,
     heat_open: bool,
+    /// HEAT panel: the paste box, and the simulator's "hold to hit" being held
+    heat_paste: String,
+    hitting: bool,
 }
 
 const ROW: f32 = 22.0;
@@ -60,7 +63,7 @@ impl Gui {
         app.repaint = Some(wake.clone());
         app.midi_io.set_wake(wake);
         Gui { app, deck_rects: [Rect::NOTHING; DECKS], jog_last: [None; DECKS], lane_drag: [None; DECKS], pad_held: None, frames: 0, test_shot: None,
-            rects: Default::default(), uitest: crate::uitest::UiTest::from_env(), heat_open: false }
+            rects: Default::default(), uitest: crate::uitest::UiTest::from_env(), heat_open: false, heat_paste: String::new(), hitting: false }
     }
 
     /// in learn mode a click on a mappable control picks it; returns true if it was used up that way
@@ -388,7 +391,7 @@ impl Gui {
             }
         }
         let pads_top = r2.bottom() + GAP;
-        let pad_h = ((ctrl_r.bottom() - pads_top - GAP) / 2.0).clamp(14.0, 44.0);
+        let pad_h = ((ctrl_r.bottom() - pads_top - GAP) / 2.0).clamp(14.0, 64.0);
         let pw = (w - 3.0 * GAP) / 4.0;
         for row in 0..2 {
             for c in 0..4 {
@@ -1097,20 +1100,133 @@ impl Gui {
         shown.iter().copied().find(|&d| !self.app.decks[d].playing && self.app.decks[d].track.is_none())
             .or_else(|| shown.iter().copied().find(|&d| !self.app.decks[d].playing)).unwrap_or(0)
     }
+    /// TrueCurve mini: device, curve, Start; HOLD for PUFF. Once something starts the panel closes and the
+    /// HEAT button carries the bowl temperature.
     fn heat_panel(&mut self, ctx: &egui::Context) {
         let mut open = self.heat_open;
-        egui::Window::new("HEAT").open(&mut open).collapsible(false).show(ctx, |ui| { ui.label("Coming"); });
+        let anchor = self.rects.get("heat").map(|r| pos2(r.right(), r.bottom() + 6.0)).unwrap_or(pos2(900.0, 40.0));
+        let max_h = (ctx.screen_rect().height() - 60.0).max(200.0);
+        let mut close = false;
+        egui::Window::new("HEAT").open(&mut open).collapsible(false).resizable(false).fixed_pos(pos2(anchor.x - 340.0, anchor.y)).default_width(340.0).max_width(340.0).show(ctx, |ui| {
+            egui::ScrollArea::vertical().max_height(max_h).show(ui, |ui| {
+            ui.spacing_mut().item_spacing = vec2(6.0, 6.0);
+            let v = self.app.heat.view.clone();
+            let running = v.phase != crate::heat::Phase::Idle;
+            ui.horizontal(|ui| {
+                ui.label(egui::RichText::new("TrueCurve").font(bold(14.0)));
+                ui.label(egui::RichText::new("heat curves for Peak Pro / Proxy").size(11.0).color(MUTED));
+            });
+            ui.horizontal(|ui| {
+                ui.add(egui::Label::new(egui::RichText::new(&v.dev_text).size(11.5).color(MUTED)).truncate());
+                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                    if v.connected {
+                        if ui.button("Disconnect").clicked() { self.app.heat.disconnect(); }
+                    } else {
+                        if ui.button("Simulator").clicked() { self.app.heat.use_simulator(); }
+                        let r = ui.add_enabled(!v.scanning, egui::Button::new(if v.scanning { "Looking…" } else { "Connect…" }));
+                        self.reg("heat.connect", r.rect);
+                        if r.clicked() { let dev = self.app.store.settings.heat_device.clone(); self.app.heat.scan(&dev); }
+                    }
+                });
+            });
+            if !v.connected {
+                for f in &v.found { if ui.add_sized(vec2(ui.available_width(), 24.0), egui::Button::new(format!("🔥 {}", f.name))).clicked() { self.app.heat.pick(f); } }
+                if v.found.is_empty() && !v.others.is_empty() && !v.scanning {
+                    ui.label(egui::RichText::new("Other devices nearby").size(11.0).color(MUTED));
+                    egui::ScrollArea::vertical().id_salt("heat_others").max_height(110.0).show(ui, |ui| {
+                        for f in &v.others { if ui.add_sized(vec2(ui.available_width(), 22.0), egui::Button::new(&f.name)).clicked() { self.app.heat.pick(f); } }
+                    });
+                }
+            }
+            // ---- curve
+            let (presets, own) = self.app.heat_names();
+            let mut name = self.app.store.settings.heat_last.clone();
+            ui.horizontal(|ui| {
+                ui.label(egui::RichText::new("Curve").size(12.0).color(MUTED));
+                ui.add_enabled_ui(!running, |ui| {
+                    egui::ComboBox::from_id_salt("heat_curve").width(240.0).selected_text(&name).show_ui(ui, |ui| {
+                        for n in &presets { ui.selectable_value(&mut name, n.clone(), n); }
+                        if !own.is_empty() { ui.separator(); ui.label(egui::RichText::new("From TrueCurve").size(10.5).color(MUTED)); }
+                        for n in &own { ui.selectable_value(&mut name, n.clone(), n); }
+                    });
+                });
+            });
+            if name != self.app.store.settings.heat_last { self.app.store.settings.heat_last = name; self.app.store.dirty_settings = true; }
+            let curve_on = running && v.phase != crate::heat::Phase::Hold;
+            let can = v.connected && v.phase != crate::heat::Phase::Prep && v.phase != crate::heat::Phase::Hold;
+            let r = ui.add_enabled(can, egui::Button::new(egui::RichText::new(if curve_on { "Stop" } else { "Start curve" }).font(bold(13.0)).color(BG))
+                .fill(if curve_on { RED } else { CUE }).min_size(vec2(ui.available_width(), 30.0)));
+            self.reg("heat.start", r.rect);
+            if r.clicked() { self.app.heat_toggle(); if !curve_on { close = true; } }
+            // ---- HOLD for PUFF
+            ui.separator();
+            ui.horizontal(|ui| {
+                ui.add_enabled_ui(!running, |ui| {
+                    let mut hf = self.app.store.settings.heat_hold_f;
+                    ui.label(egui::RichText::new("Hold").size(12.0));
+                    if ui.add(egui::DragValue::new(&mut hf).range(crate::heat::MIN_F..=crate::heat::MAX_F).speed(1.0).suffix("°F")).changed() {
+                        self.app.store.settings.heat_hold_f = (hf / 5.0).round() * 5.0; self.app.store.dirty_settings = true;
+                    }
+                    let mut pf = self.app.store.settings.heat_puff_full;
+                    ui.label(egui::RichText::new("full warble at").size(12.0).color(MUTED));
+                    egui::ComboBox::from_id_salt("heat_full").width(90.0).selected_text(if pf == 0.0 { "Auto".to_string() } else { format!("{pf:.0}°F drop") }).show_ui(ui, |ui| {
+                        ui.selectable_value(&mut pf, 0.0, "Auto");
+                        for d in [4.0, 8.0, 15.0, 25.0, 40.0] { ui.selectable_value(&mut pf, d, format!("{d:.0}°F drop")); }
+                    });
+                    if pf != self.app.store.settings.heat_puff_full { self.app.store.settings.heat_puff_full = pf; self.app.store.dirty_settings = true; }
+                });
+            });
+            let holding = v.phase == crate::heat::Phase::Hold;
+            let can = v.connected && v.phase != crate::heat::Phase::Prep && (!running || holding);
+            let r = ui.add_enabled(can, egui::Button::new(egui::RichText::new(if holding { "Stop HOLD" } else { "HOLD for PUFF" }).font(bold(13.0)).color(BG))
+                .fill(if holding { RED } else { LOOP }).min_size(vec2(ui.available_width(), 30.0)));
+            self.reg("heat.hold", r.rect);
+            if r.clicked() { self.app.heat_hold(); if !holding && !v.is_sim { close = true; } }
+            if holding {
+                let (rect, _) = ui.allocate_exact_size(vec2(ui.available_width(), 8.0), Sense::hover());
+                ui.painter().rect_filled(rect, 3.0, RAISE);
+                ui.painter().rect_filled(Rect::from_min_size(rect.min, vec2(rect.width() * v.puff as f32, rect.height())), 3.0, RED);
+                if !v.puff_info.is_empty() { ui.label(egui::RichText::new(&v.puff_info).font(mono(10.5)).color(MUTED)); }
+                if v.is_sim {
+                    // press and hold: a pretend draw
+                    let r = button(ui, if self.hitting { "Hitting…" } else { "Hold to hit (simulator)" }, vec2(ui.available_width(), 32.0), self.hitting, RED, 12.5);
+                    let down = r.is_pointer_button_down_on();
+                    if down != self.hitting { self.hitting = down; self.app.heat.hit(if down { 1.0 } else { 0.0 }); }
+                }
+            }
+            ui.label(egui::RichText::new("Beat FX → PUFF (on offer while a Puffco or the simulator is connected). A harder hit drops the bowl temperature further, and the warble gets deeper and faster. LEVEL caps it.").size(10.5).color(MUTED));
+            if !v.msg.is_empty() { ui.label(egui::RichText::new(&v.msg).size(12.0)); }
+            // ---- curves from TrueCurve
+            ui.separator();
+            ui.label(egui::RichText::new("Curves from TrueCurve: press \"Copy curves for Cratebox\" there, paste here").size(11.0).color(MUTED));
+            ui.add(egui::TextEdit::multiline(&mut self.heat_paste).desired_rows(2).desired_width(f32::INFINITY).font(mono(10.5)).hint_text("{\"My curve\": {\"points\": [...]}}"));
+            if ui.add_enabled(!self.heat_paste.trim().is_empty(), egui::Button::new("Add curves")).clicked() {
+                let m = self.app.heat_paste(&self.heat_paste.clone());
+                if m.starts_with("Added") { self.heat_paste.clear(); }
+                self.app.say(&m, 5.0);
+            }
+            ui.label(egui::RichText::new("Uses profile slot 4 while it runs and puts it back after; stops at 600°F. Close this and keep mixing: the HEAT button shows the bowl temperature.").size(10.5).color(DIM));
+            });
+        });
+        if close { open = false; }
+        if !open && self.hitting { self.hitting = false; self.app.heat.hit(0.0); }
         self.heat_open = open;
+        self.app.heat.set_panel(open);
     }
 
     /// CRATEBOX_DEMO=1: load two tracks, play one with a loop and hot cues (for screenshots)
     fn demo(&mut self) {
+        // CRATEBOX_DEMO_HEAT=1: the simulator holding 500°F with the HEAT panel open
+        if std::env::var("CRATEBOX_DEMO_HEAT").is_ok() {
+            if self.frames == 3 { self.app.heat.use_simulator(); self.heat_open = true; }
+            if self.app.heat.view.connected && !self.app.heat.running() && self.frames < 200 && self.frames % 20 == 0 { self.app.heat_hold(); }
+        }
         let a = &mut self.app;
         let ready = a.tracks.len() >= 2 && a.tracks.iter().all(|t| t.bpm.is_some());
         if !ready { return; }
-        if a.four() && a.tracks.len() >= 5 && a.decks[2].track.is_none() && !a.decks[2].loading && a.decks[0].track.is_some() {
-            a.list.sel = 3; a.load_selected(2);
-            a.list.sel = 4; a.load_selected(3);
+        if a.four() && a.tracks.len() >= 4 && a.decks[2].track.is_none() && !a.decks[2].loading && a.decks[0].track.is_some() {
+            a.list.sel = 0; a.load_selected(2);
+            a.list.sel = 3; a.load_selected(3);
         }
         if a.decks[0].track.is_none() && !a.decks[0].loading {
             a.list.sort = Some(SortKey::Bpm); a.apply_view(false);
@@ -1213,7 +1329,7 @@ impl eframe::App for Gui {
             self.library(ui);
         });
         if self.app.ui.settings_open { self.settings(ctx); }
-        if self.heat_open { self.heat_panel(ctx); }
+        if self.heat_open { self.heat_panel(ctx); } else { self.app.heat.set_panel(false); }
         self.dialogs(ctx);
         if let Some((path, at)) = &self.test_shot {
             if self.frames == *at { ctx.send_viewport_cmd(egui::ViewportCommand::Screenshot(Default::default())); }

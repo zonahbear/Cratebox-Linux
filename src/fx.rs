@@ -338,7 +338,8 @@ mod tests {
         u.process(&mut l, &mut r, 1.0);
         assert!(l.iter().any(|v| v.abs() > 0.05), "echo tail");
         // and it stops being active once the tail has died away
-        for k in 0..400 { let (mut l, mut r) = (vec![0f32; 480], vec![0f32; 480]); u.process(&mut l, &mut r, 2.0 + k as f64 * 0.01); }
+        // (feedback 0.6 every quarter second takes ~4.5 s to fall under the threshold, then half a second of quiet)
+        for k in 0..800 { let (mut l, mut r) = (vec![0f32; 480], vec![0f32; 480]); u.process(&mut l, &mut r, 2.0 + k as f64 * 0.01); }
         assert!(!u.active());
     }
     #[test]

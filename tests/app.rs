@@ -128,7 +128,7 @@ fn whole_app() {
     assert!(app.store.cache[&id0].grid_manual && app.store.cache[&id0].bpm == Some(128.0));
 
     // ---- master tempo: +8% with keylock keeps the key; off = vinyl (key shifts)
-    app.decks[1].set_sync(false, None);
+    app.set_sync(1, false);
     app.decks[1].set_pitch(1.0);
     app.set_mt(1, false);
     let k_vinyl = app.decks[1].key_now();

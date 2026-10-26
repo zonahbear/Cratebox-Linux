@@ -5,8 +5,8 @@ conventions, or finish/start a piece of open work. Keep it under ~150 lines.
 
 ## What this repo is
 
-Native Linux port of the Cratebox web app in Rust (eframe/egui on glow, cpal for audio, midir for MIDI,
-symphonia for decoding). Two decks, DDJ-FLX4 first, other Pioneer/AlphaTheta controllers via Mixxx-derived maps.
+Native Linux port of the Cratebox web app (and the iOS performance mode) in Rust (eframe/egui on glow, cpal for audio, midir for MIDI,
+symphonia for decoding). Two or four decks (deck layers 1⇄3 / 2⇄4), DDJ-FLX4 first, other Pioneer/AlphaTheta controllers via Mixxx-derived maps.
 Same behaviour and analysis as the web version, no browser or server. v0.1.0: passes its tests, not yet tried
 on real sound hardware or a controller. Built for x86-64-v3 CPUs.
 
@@ -16,7 +16,9 @@ on real sound hardware or a controller. Built for x86-64-v3 CPUs.
 src/main.rs        entry; CPU feature check, --version, --screenshot FILE [FRAMES] (used by tests), --kiosk (full screen)
 src/lib.rs         module list (the binary and tests both use the lib)
 src/app.rs         App: decks, mixer, library, playlists, controller, background jobs; `poll` drains job results each frame
-src/ui.rs          the window: header, waveforms, decks + mixer, library (largest file)
+src/ui.rs          the window, XDJ-style, sized for 1152×720 pt (MacBook10,1 at 2x): header (REC, WAVE, 4 DECKS,
+                   HEAT ▾, ⚙), stacked waveform lanes with info strips, decks either side of the mixer (3 1 2 4
+                   + BEAT FX), library; WAVE = only the lanes; BROWSE = lanes + big library; HEAT panel
 src/widgets.rs     custom-drawn knobs, faders, jogs, meters, waveform painters
 src/dialog.rs      egui file/folder picker (no GTK/portal)
 src/engine.rs      audio engine: 2 players → mixer; commands in by channel, try-locked snapshot out
@@ -34,10 +36,16 @@ src/maps.rs        GENERATED from the web app's MIXXX_MAPS; don't hand-edit (reg
 src/midi_io.rs audio_io.rs   midir / cpal device handling (rescans, "no output" timer mode)
 src/store.rs       JSON persistence in ~/.local/share/cratebox ($XDG_DATA_HOME, or $CRATEBOX_DATA)
 src/ring.rs        lock-free ring buffer
+src/fx.rs          Beat FX / Pad FX DSP (FxUnit: one per channel insert + master), port of the iOS FxUnit
+src/beatfx.rs      BEAT FX unit + PAD FX state on the UI thread; sends beat clocks every 100 ms
+src/recorder.rs    REC: master → 16-bit WAV (ring from the audio thread, writer thread)
+src/heat.rs        HEAT (TrueCurve mini): curve maths, driver, learner, PuffDrop, simulator, Lorax bytes,
+                   BlueZ GATT via zbus (pure Rust, no libdbus), worker thread; port of iOS personal/heat
 src/uitest.rs      scripted UI driver: CRATEBOX_UITEST=script.json, output to CRATEBOX_UITEST_OUT
 tests/analysis.rs  analysis accuracy on synthetic tracks
 tests/app.rs       whole app end-to-end with FLX4 MIDI messages, persistence
 tests/ui.rs        real window under Xvfb (skipped without xvfb-run)
+tests/four.rs      4 decks end-to-end: channel 3, sync, layer buttons, FX, REC, HEAT simulator → PUFF
 tests/make_tracks.py   synthetic test tracks → tests/music (same script as the web repo)
 tests/fixtures/    rekordbox USB export (pyrekordbox test data, MIT)
 assets/fonts/      Inter + DejaVu (licences alongside); assets/icon-512.png
@@ -86,16 +94,19 @@ distro/            Cratebox OS ISO: build-iso.sh remasters Lubuntu 26.04.1 (laye
 
 ## Gotchas
 
-- Two decks only (the web and iOS apps have 4-deck mode and deck layers; not ported).
+- Layer buttons are learned once (Settings → Controller → Set up layer buttons…): the FLX4's SMART CFX/FADER
+  notes aren't in the map. Their LEDs stay off.
+- HEAT safety rules (slot 4 backed up/restored, 600°F cutoff, 350-590°F clamp) must match zonahbear/truecurve.
+- CRATEBOX_DEMO=1 (+ CRATEBOX_DEMO_HEAT=1) drive the screenshots; 4-deck demo loads decks 3/4 too.
 - rekordbox is read-only here: never writes to a stick (the web app's playlist writer isn't ported).
 - Binary refuses to run on CPUs without AVX2/FMA/BMI2 and says how to rebuild.
 - `build-release.sh` links with `--allow-shlib-undefined` on purpose (user's own libasound at run time).
 
 ## Open work (update this when it changes)
 
-- Untested on real audio hardware and a real FLX4.
+- Untested on real audio hardware and a real FLX4; HEAT's BlueZ link untested on a real Puffco (simulator only).
 - Cratebox OS: the remaster was run in a cloud session without the driver and Chrome (SKIP_THIRD_PARTY=1);
   the full build is Actions → cratebox-os. Then on the MacBook: the checks in distro/README.md (speakers after
   warm reboot, cold boot and sleep; headphones). The "proposed" anti-dropout settings there are unmeasured.
-- Behind the web app: 4 decks / deck layers, Beat FX & Pad FX, recording, stick playlist editing, other
+- Behind the web app: stick playlist editing, other
   1.1.x changes. Check the web CHANGELOG against this port before claiming parity.
