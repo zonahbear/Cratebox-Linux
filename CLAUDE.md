@@ -14,19 +14,24 @@ src/main.rs        entry: CPU check, display env fixes, window (--kiosk = full s
 src/               lib (ui.rs = egui Gui, audio/MIDI/analysis/rekordbox modules)
 tests/             analysis.rs, app.rs (FLX4 MIDI end to end), ui.rs (Xvfb); fixtures/rekordbox_usb
 packaging/         install.sh, cratebox.desktop, icon; build-release.sh makes the glibc-2.31 tarball
-distro/            kiosk ISO: build-iso.sh (remasters Lubuntu 24.04.5), chroot-setup.sh, overlay/ (session,
-                   openbox rc, MacBook audio bits). See distro/README.md
-.github/workflows/kiosk-iso.yml   manual-only ubuntu job → release "kiosk-latest" (ISO split into <2 GiB parts)
+distro/            Cratebox OS ISO: build-iso.sh remasters Lubuntu 26.04.1 (layered squashfs: chroot-setup.sh runs in
+                   the minimal.standard layer, live-setup.sh in the live layer), overlay/ = files for the installed
+                   system, live/ = live-session script. distro/README.md = user guide + verified/proposed table
+.github/workflows/cratebox-os.yml  manual-only ubuntu job → release "kiosk-latest" (ISO split into <2 GiB parts)
 ```
 
 ## Conventions
 
 - Tests: `cargo test --release` (ui.rs needs xvfb-run). `env.sh` is only for the original build workspace.
-- Kiosk ISO keeps the GA 6.8 kernel: the 12-inch MacBook speaker driver can't build for HWE kernels on Ubuntu.
+- Cratebox OS is audio first, for Jonah's MacBook10,1: keep the ISO's kernel (7.0.0-30, verified with the speaker
+  driver) and hold it; s2idle only; never TLP or HDA power_save tweaks; never remove pipewire/wireplumber/rtkit.
+  StartupMute=%00 is per-machine NVRAM (first-boot step in distro/README.md), the image can't set it.
+- Build deps: libasound2-dev, libdbus-1-dev (cpal's audio_thread_priority = realtime audio thread via rtkit).
 - Actions minutes are scarce: workflows stay manual (`workflow_dispatch`).
 
 ## Open work
 
-- Kiosk ISO has never been built or booted (the cloud sandbox would not run the driver build as root). First real run:
-  Actions → kiosk-iso, then boot on Jonah's MacBook10,1 and check speakers, keyboard/trackpad, Wi-Fi.
+- Cratebox OS: the remaster ran in a cloud session without the driver and Chrome (SKIP_THIRD_PARTY=1); the full
+  build is Actions → cratebox-os. Then on the MacBook: the checks in distro/README.md (speakers after warm reboot,
+  cold boot and sleep; headphones). The "proposed" anti-dropout settings there are unmeasured.
 - Not yet tried on real sound hardware or a controller (README).

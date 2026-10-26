@@ -1,0 +1,2 @@
+# MacBook10,1: the Apple NVMe doesn't come back from D3cold, so sleep never wakes. Verified fix.
+ACTION=="add", SUBSYSTEM=="pci", KERNEL=="0000:01:00.0", ATTR{d3cold_allowed}="0"

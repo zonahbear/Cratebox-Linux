@@ -1,45 +1,52 @@
 #!/bin/bash
-# Runs inside the unpacked Lubuntu root (build-iso.sh puts this repo's bits in /tmp/cratebox-kiosk).
-# Turns stock Lubuntu 24.04 into the Cratebox kiosk for the 12-inch MacBook (A1534).
+# Runs inside the installed-system layer of Lubuntu 26.04 (build-iso.sh stages this repo's bits in
+# /tmp/cratebox-os). Turns it into Cratebox OS for the 12-inch MacBook (A1534, MacBook10,1).
+# Audio comes first: this follows what was verified on Jonah's MacBook10,1 (distro/README.md lists
+# which parts were verified on the machine and which are only proposed).
 set -euxo pipefail
 export DEBIAN_FRONTEND=noninteractive
-src=/tmp/cratebox-kiosk
+src=/tmp/cratebox-os
 apt_get() { apt-get -y -o Dpkg::Options::=--force-confdef -o Dpkg::Options::=--force-confold "$@"; }
 
+# the ISO's own apt source (file:/cdrom) only exists on the stick: off during the build, put back after
+cdrom=/etc/apt/sources.list.d/cdrom.sources
+if [ -e "$cdrom" ]; then mv "$cdrom" "$src/"; trap 'mv "$src/cdrom.sources" "$cdrom"' EXIT; fi
 apt-get update
 
-# Kernel: the GA 6.8 kernel instead of HWE. The CS4208 speaker driver builds against Ubuntu's
-# own linux-source tarball, which only exists for GA kernels (see its prepare.cirrus.driver.sh).
-apt_get install --no-install-recommends linux-generic linux-headers-generic linux-source dkms build-essential
-apt_get purge $(dpkg-query -W -f '${Package}\n' | grep -E '^linux-.*(hwe|-7\.[0-9]+\.[0-9]+)')
-kver=$(ls /lib/modules | sort -V | tail -n1)
-case "$kver" in 6.8.*) ;; *) echo "expected the 6.8 GA kernel, got $kver" >&2; exit 1 ;; esac
+# Kernel: keep exactly the one the ISO ships (7.0.0-30, the kernel the speaker driver was verified
+# on) and hold it, so an update can't swap the kernel under the out-of-tree driver before a gig
+kver=$(ls /lib/modules)
+[ "$(echo "$kver" | wc -l)" = 1 ] || { echo "expected one kernel, got: $kver" >&2; exit 1; }
+kpkgver=$(dpkg-query -W -f '${Version}' "linux-image-$kver")
+apt_get install --no-install-recommends "linux-headers-$kver" "linux-source-${kver%%-*}=$kpkgver" dkms build-essential
+apt-mark hold "linux-image-$kver" "linux-modules-$kver" "linux-headers-$kver" "linux-source-${kver%%-*}" \
+    $(dpkg-query -W -f '${Package}\n' | grep -E '^linux-(generic|image-generic|headers-generic|modules-extra-'"$kver"')$')
 
-# Speaker driver for MacBook9,1 / MacBook10,1 (leifliddy/macbook12-audio-driver), via DKMS so
-# kernel updates rebuild it
-drv=/usr/src/macbook12-audio-driver-0.1
-rm -rf "$drv" && install -d "$drv"
-cp -a "$src"/macbook12-audio-driver/{dkms.conf,Makefile_cirrus,Makefile_cs420x,prepare.cirrus.driver.sh,patch_cirrus} "$drv"/
-dkms add -m macbook12-audio-driver -v 0.1 || true
-dkms install -m macbook12-audio-driver -v 0.1 -k "$kver" --force
-modinfo -k "$kver" snd_hda_codec_cirrus | grep -q updates/
+# Speaker driver for MacBook9,1 / MacBook10,1 (leifliddy/macbook12-audio-driver), unpatched, DKMS
+if [ -z "${SKIP_THIRD_PARTY:-}" ]; then
+    drv=/usr/src/macbook12-audio-driver-0.1
+    rm -rf "$drv" && install -d "$drv"
+    cp -a "$src"/macbook12-audio-driver/{dkms.conf,Makefile_cirrus,Makefile_cs420x,prepare.cirrus.driver.sh,patch_cirrus} "$drv"/
+    (cd "$drv/patch_cirrus" && sha256sum cs420x.c patch_cirrus_a1534_pcm.h patch_cirrus_a1534_setup.h) | cut -c1-8 | tr '\n' ' ' \
+        | grep -qx '4f733852 3f21e687 cc77fb60 ' || { echo "driver sources differ from the verified ones" >&2; exit 1; }
+    dkms add -m macbook12-audio-driver -v 0.1
+    dkms install -m macbook12-audio-driver -v 0.1 -k "$kver"
+    modinfo -k "$kver" -n snd_hda_codec_cs420x | grep -q /updates/
+fi
 
-# Keyboard and trackpad (applespi, mainline since 5.3) in the initramfs, so they work from the
-# first prompt on
-for m in intel_lpss_pci spi_pxa2xx_platform spi_pxa2xx_pci applespi; do
-    grep -qx "$m" /etc/initramfs-tools/modules || echo "$m" >> /etc/initramfs-tools/modules
-done
+# Apps: Nicotine+ (Soulseek), Google Chrome (the one browser), and what the kiosk session uses
+apt_get install nicotine openbox x11-xserver-utils alsa-utils power-profiles-daemon
+if [ -z "${SKIP_THIRD_PARTY:-}" ]; then
+    install -d -m 0755 /etc/apt/keyrings
+    curl -fsSL https://dl.google.com/linux/linux_signing_key.pub | gpg --dearmor -o /etc/apt/keyrings/google-chrome.gpg
+    echo "deb [arch=amd64 signed-by=/etc/apt/keyrings/google-chrome.gpg] https://dl.google.com/linux/chrome/deb/ stable main" \
+        > /etc/apt/sources.list.d/google-chrome.list
+    apt-get update
+    apt_get install google-chrome-stable
+fi
 
-# Apps: Nicotine+ (Soulseek) from Ubuntu, Google Chrome from Google's repo
-apt_get install nicotine xinit x11-xserver-utils alsa-utils
-install -d -m 0755 /etc/apt/keyrings
-curl -fsSL https://dl.google.com/linux/linux_signing_key.pub | gpg --dearmor -o /etc/apt/keyrings/google-chrome.gpg
-echo "deb [arch=amd64 signed-by=/etc/apt/keyrings/google-chrome.gpg] https://dl.google.com/linux/chrome/deb/ stable main" \
-    > /etc/apt/sources.list.d/google-chrome.list
-apt-get update
-apt_get install google-chrome-stable
-
-# Lighter: Chrome is the browser, so no snapd / Firefox snap; no office suite on a DJ machine
+# Lighter: no snapd / Firefox snap (Chrome is the browser), no office suite on a DJ machine
+apt-mark manual pipewire pipewire-pulse wireplumber rtkit
 apt_get purge snapd firefox $(dpkg-query -W -f '${Package}\n' | grep '^libreoffice')
 apt_get autoremove --purge
 
@@ -49,18 +56,14 @@ install -Dm 0644 "$src/cratebox.desktop" /usr/share/applications/cratebox.deskto
 install -Dm 0644 "$src/cratebox.png" /usr/share/icons/hicolor/512x512/apps/cratebox.png
 gtk-update-icon-cache -q /usr/share/icons/hicolor || true
 cp -a "$src"/overlay/. /
-
-# Kiosk session. Live ISO: casper logs into lubuntu-live-environment.desktop, whose script we
-# divert so Cratebox comes first. Installed system: Calamares sets SDDM to log straight into the
-# Cratebox session.
-dpkg-divert --local --rename --add --divert /usr/libexec/start-lubuntu-live-env.distrib /usr/libexec/start-lubuntu-live-env
-install -m 0755 /usr/share/cratebox-kiosk/start-lubuntu-live-env /usr/libexec/start-lubuntu-live-env
-sed -i -e 's/executable: "lxqt"/executable: "cratebox"/' -e 's/desktopFile: "Lubuntu"/desktopFile: "cratebox"/' \
-    /etc/calamares/modules/displaymanager.conf
-sed -i 's/^doAutologin: false/doAutologin: true/' /etc/calamares/modules/users.conf
-grep -q 'desktopFile: "cratebox"' /etc/calamares/modules/displaymanager.conf
 systemctl enable macbook12-audio-amps.service
 
-update-initramfs -u -k "$kver"
+# The brief's hard rules, checked rather than trusted: the audio stack is all there, nothing that
+# switches on HDA power saving, no debug modprobe file
+for p in pipewire pipewire-pulse wireplumber rtkit; do dpkg-query -W -f '${Status}\n' "$p" | grep -q 'install ok installed'; done
+fail() { echo "$1" >&2; exit 1; }
+if dpkg-query -W -f '${Status}\n' tlp 2>/dev/null | grep -q 'install ok installed'; then fail "tlp is installed"; fi
+if grep -rqs 'power_save' /etc/modprobe.d/ /usr/lib/modprobe.d/; then fail "a modprobe file sets power_save"; fi
+if [ -e /etc/modprobe.d/99-macbook12-audio-diagnostic.conf ]; then fail "the audio debug modprobe file is there"; fi
+
 apt-get clean
-rm -rf /tmp/* /var/tmp/*

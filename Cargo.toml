@@ -15,7 +15,7 @@ path = "src/main.rs"
 
 [dependencies]
 eframe = { version = "0.32", default-features = false, features = ["glow", "x11", "wayland", "default_fonts"] }
-cpal = "0.16"
+cpal = { version = "0.16", features = ["audio_thread_priority"] }
 midir = "0.10"
 symphonia = { version = "0.5", features = ["all"] }
 serde = { version = "1", features = ["derive"] }
