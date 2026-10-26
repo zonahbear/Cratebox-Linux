@@ -1,0 +1,3 @@
+#!/bin/sh
+# Live ISO: Cratebox first; quitting it opens the normal Lubuntu live session (Try / Install).
+exec /usr/libexec/cratebox-kiosk-session /usr/libexec/start-lubuntu-live-env.distrib

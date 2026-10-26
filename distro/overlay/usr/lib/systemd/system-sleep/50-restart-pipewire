@@ -1,0 +1,10 @@
+#!/bin/sh
+# After resume, restart every logged-in user's PipeWire stack so stuck audio streams recover
+# (the manual restart is verified on the MacBook10,1; this any-user loop is not yet)
+[ "$1" = post ] || exit 0
+(
+    sleep 2
+    for u in $(loginctl list-users --no-legend | awk '$1 >= 1000 { print $2 }'); do
+        systemctl --user -M "$u@" restart wireplumber pipewire pipewire-pulse
+    done
+) >/dev/null 2>&1 &

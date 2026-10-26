@@ -91,6 +91,8 @@ fn main() -> eframe::Result<()> {
     fix_display_env();
     let mut vp = egui::ViewportBuilder::default().with_title("Cratebox").with_app_id("cratebox").with_inner_size([1440.0, 900.0]).with_min_inner_size([1100.0, 720.0]);
     if let Some(i) = icon() { vp = vp.with_icon(std::sync::Arc::new(i)); }
+    // --kiosk: full screen, no title bar (the Cratebox kiosk session on the distro ISO)
+    if args.iter().any(|a| a == "--kiosk") { vp = vp.with_fullscreen(true).with_decorations(false); }
     let opts = eframe::NativeOptions { viewport: vp, vsync: true, ..Default::default() };
     let r = eframe::run_native("Cratebox", opts, Box::new(move |cc| {
         let mut g = cratebox::ui::Gui::new(cc);

@@ -1,0 +1,6 @@
+[Desktop Entry]
+Name=Cratebox
+Comment=Cratebox full screen; quit it for the Lubuntu desktop
+Exec=/usr/libexec/cratebox-kiosk-session /usr/bin/startlxqt
+Type=Application
+DesktopNames=LXQt
