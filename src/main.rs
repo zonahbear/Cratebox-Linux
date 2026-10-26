@@ -1,4 +1,6 @@
-//! Cratebox for Linux: two-deck DJ software for the Pioneer DDJ-FLX4 and friends.
+//! Cratebox for Linux (and Windows): two-deck DJ software for the Pioneer DDJ-FLX4 and friends.
+// Windows: a GUI app, no console window (--version attaches to the terminal it was started from)
+#![cfg_attr(windows, windows_subsystem = "windows")]
 use eframe::egui;
 
 fn icon() -> Option<egui::IconData> {
@@ -29,11 +31,13 @@ fn cpu_ok() -> bool {
     std::hint::black_box(fma && avx2 && bmi2)
 }
 
+#[cfg(target_os = "linux")]
 fn uid() -> Option<u32> {
     let st = std::fs::read_to_string("/proc/self/status").ok()?;
     st.lines().find(|l| l.starts_with("Uid:"))?.split_whitespace().nth(2)?.parse().ok()
 }
 
+#[cfg(target_os = "linux")]
 /// Find the desktop's display when the environment doesn't say (terminals that drop variables,
 /// launchers, `su`): a Wayland socket in the runtime dir, or the X authority file the login made.
 fn fix_display_env() {
@@ -58,6 +62,7 @@ fn fix_display_env() {
     }
 }
 
+#[cfg(target_os = "linux")]
 fn display_help(err: &dyn std::fmt::Display) {
     eprintln!("\nCratebox couldn't open a window: {err}\n");
     if uid() == Some(0) {
@@ -75,21 +80,34 @@ fn display_help(err: &dyn std::fmt::Display) {
     }
 }
 
+/// Windows has no terminal to print to, so problems at startup go in a message box
+#[cfg(windows)]
+fn display_help(err: &dyn std::fmt::Display) { cratebox::win::message_box(&format!("Cratebox couldn't open a window: {err}\n\nUpdating the graphics driver usually fixes this.")); }
+
 fn main() -> eframe::Result<()> {
     let args: Vec<String> = std::env::args().collect();
     // built for x86-64-v3 (AVX2/FMA/BMI2): say so plainly on an older CPU instead of crashing.
     // (is_x86_feature_detected! would be folded to `true` at compile time here, so ask CPUID directly)
     #[cfg(target_arch = "x86_64")]
     if !cpu_ok() {
-        use std::io::Write;
-        let _ = std::io::stderr().write_all(b"Cratebox was built for x86-64-v3 CPUs (Intel Haswell 2013+ / AMD Zen 1+) and this CPU lacks AVX2/FMA/BMI2.\nBuild it for this machine: cargo build --release --config 'build.rustflags=[]'\n");
+        const MSG: &str = "Cratebox was built for x86-64-v3 CPUs (Intel Haswell 2013+ / AMD Zen 1+) and this CPU lacks AVX2/FMA/BMI2.";
+        #[cfg(windows)]
+        cratebox::win::message_box(MSG);
+        #[cfg(not(windows))]
+        { use std::io::Write; let _ = std::io::stderr().write_all(format!("{MSG}\nBuild it for this machine: cargo build --release --config 'build.rustflags=[]'\n").as_bytes()); }
         std::process::exit(1);
     }
+    #[cfg(windows)]
+    cratebox::win::attach_console();
     if args.iter().any(|a| a == "--version" || a == "-V") { println!("cratebox {}", env!("CARGO_PKG_VERSION")); return Ok(()); }
     // --screenshot FILE [FRAMES]: render, save a PNG and quit (used by the tests)
     let shot = args.iter().position(|a| a == "--screenshot").and_then(|i| args.get(i + 1).map(|p| (std::path::PathBuf::from(p), args.get(i + 2).and_then(|n| n.parse().ok()).unwrap_or(90u64))));
+    #[cfg(target_os = "linux")]
     fix_display_env();
     let mut vp = egui::ViewportBuilder::default().with_title("Cratebox").with_app_id("cratebox").with_inner_size([1440.0, 900.0]).with_min_inner_size([1100.0, 720.0]);
+    // Windows: starts maximized, and the UI scales to the window (ui::fit_scale), so the min size is small
+    #[cfg(windows)]
+    { vp = vp.with_min_inner_size([960.0, 600.0]); if shot.is_none() { vp = vp.with_maximized(true); } }
     if let Some(i) = icon() { vp = vp.with_icon(std::sync::Arc::new(i)); }
     // --kiosk: full screen, no title bar (the Cratebox kiosk session on the distro ISO)
     if args.iter().any(|a| a == "--kiosk") { vp = vp.with_fullscreen(true).with_decorations(false); }

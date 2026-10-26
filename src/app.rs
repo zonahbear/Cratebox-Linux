@@ -110,7 +110,10 @@ pub fn now_date() -> String {
 pub fn local_stamp() -> String {
     let t = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0) as libc::time_t;
     let mut tm: libc::tm = unsafe { std::mem::zeroed() };
+    #[cfg(unix)]
     unsafe { libc::localtime_r(&t, &mut tm); }
+    #[cfg(windows)]
+    unsafe { libc::localtime_s(&mut tm, &t); }
     format!("{:04}-{:02}-{:02} {:02}-{:02}-{:02}", tm.tm_year + 1900, tm.tm_mon + 1, tm.tm_mday, tm.tm_hour, tm.tm_min, tm.tm_sec)
 }
 fn civil(z: i64) -> (i64, u32, u32) {

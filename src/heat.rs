@@ -3,8 +3,8 @@
 //! TC section and zonahbear/truecurve): same curve maths (monotone cubic or straight lines), predictive driver,
 //! heater-model learning, Lorax byte formats and safety rules (curves on profile slot 4, backed up and put back;
 //! 600°F cutoff; targets clamped 350-590°F; on a lost link the device finishes its own cycle).
-//! Threads: `Heat` is the UI side; a worker thread owns the device (BlueZ over D-Bus via zbus, or the
-//! simulator) and does every blocking read and write. It never touches the audio engine: PUFF amounts reach
+//! Threads: `Heat` is the UI side; a worker thread owns the device (BlueZ over D-Bus via zbus on Linux,
+//! WinRT Bluetooth LE on Windows (heat_win.rs), or the simulator) and does every blocking read and write. It never touches the audio engine: PUFF amounts reach
 //! the BEAT FX unit through the app as ordinary commands. Temperatures are °F, times seconds.
 
 use serde::{Deserialize, Serialize};
@@ -390,7 +390,96 @@ impl Device for SimDevice {
     fn set_airflow(&mut self, a: f64) { self.tick(); self.h.airflow = clamp(a, 0.0, 1.0); }
 }
 
+/// The Lorax side of a Puffco link, the same over BlueZ and WinRT: the unlock handshake, reads and writes
+/// by path, and the `Device` calls. The transport's `Ble` brings `send` (one framed request and its
+/// reply), `up` and `close`, and the fields used here.
+macro_rules! lorax_device {
+    ($t:ty) => {
+        impl $t {
+            fn auth(&mut self) -> String {
+                match self.send(0, &[], 3.0) {
+                    Ok((st, seed)) if st == 0 && seed.len() >= 16 => match self.send(1, &lorax::token(&seed), 3.0) {
+                        Ok((0, _)) => "ok".into(),
+                        Ok((st, _)) => format!("unlock returned status {st}"),
+                        Err(e) => if e.contains("timed out") { "no reply from device".into() } else { e },
+                    },
+                    Ok((st, _)) => format!("seed request returned status {st}"),
+                    Err(e) => if e.contains("timed out") { "no reply from device".into() } else { e },
+                }
+            }
+            fn read(&mut self, path: &str, max: u16) -> Option<Vec<u8>> { match self.send(16, &lorax::read_payload(path, max), 3.0) { Ok((0, d)) => Some(d), _ => None } }
+            fn write(&mut self, path: &str, bytes: &[u8]) -> bool { matches!(self.send(17, &lorax::write_payload(path, bytes), 3.0), Ok((0, _))) }
+        }
+
+        impl Device for $t {
+            fn name(&self) -> String { self.name.clone() }
+            fn id(&self) -> String { self.addr.clone() }
+            fn connected(&mut self) -> bool { self.up() }
+            fn disconnect(&mut self) { self.close() }
+            fn read_temp(&mut self) -> Option<f64> {
+                let order = if self.temp_path == lorax::TEMP_ALT { [lorax::TEMP_ALT, lorax::TEMP] } else { [lorax::TEMP, lorax::TEMP_ALT] };
+                for path in order {
+                    let b = self.read(path, 4);
+                    if let Some(c) = lorax::decode_c(b.as_deref(), Some(self.fmt)).filter(|c| *c > 0.0) { self.temp_path = path; return Some((c_to_f(c) * 10.0).round() / 10.0); }
+                }
+                None
+            }
+            fn read_state(&mut self) -> Option<i32> { self.read(lorax::STATE, 1).and_then(|b| b.first().map(|&x| x as i32)) }
+            fn read_battery(&mut self) -> Option<i64> { let b = self.read(lorax::SOC, 4); self.soc.decode(b.as_deref()) }
+            fn read_active_slot(&mut self) -> Option<u8> { self.read(lorax::ACTIVE_SLOT, 1).and_then(|b| b.first().copied()) }
+            fn set_active_slot(&mut self, s: u8) -> bool { self.write(lorax::ACTIVE_SLOT, &[s]) }
+            fn backup_slot(&mut self, s: u8) -> SlotBackup { SlotBackup { temp: self.read(&lorax::p_temp(s), 4), time: self.read(&lorax::p_time(s), 4) } }
+            fn restore_slot(&mut self, s: u8, b: &SlotBackup) {
+                if let Some(t) = b.temp.as_ref().filter(|t| t.len() >= 4) { self.write(&lorax::p_temp(s), &t[..4]); }
+                if let Some(t) = b.time.as_ref().filter(|t| t.len() >= 4) { self.write(&lorax::p_time(s), &t[..4]); }
+            }
+            fn write_profile_temp(&mut self, s: u8, f: f64) -> bool {
+                let c = f_to_c(clamp(f, MIN_F, MAX_F));
+                let other = if self.fmt == Fmt::I10 { Fmt::F32 } else { Fmt::I10 };
+                for fm in [self.fmt, other] {
+                    if !self.write(&lorax::p_temp(s), &lorax::encode_c(c, fm)) { continue; }
+                    if let Some(b) = self.read(&lorax::p_temp(s), 4) { if b.len() >= 4 && (lorax::decode_as(&b, fm) - c).abs() > 1.5 { continue; } }
+                    self.fmt = fm;
+                    return true;
+                }
+                false
+            }
+            /// Peak Pro: heat time in float seconds. Proxy units vary by firmware, so it's left alone and the run ends the session.
+            fn write_profile_time(&mut self, s: u8, secs: f64) -> bool {
+                if self.is_proxy { return false; }
+                if !self.write(&lorax::p_time(s), &lorax::f32_bytes(secs)) { return false; }
+                match self.read(&lorax::p_time(s), 4) { Some(r) if r.len() >= 4 => (lorax::f32v(&r) - secs).abs() <= 1.0, _ => true }
+            }
+            fn start(&mut self) -> bool { self.write(lorax::MODE, &[7]) }
+            fn stop(&mut self) -> bool {
+                let mut ok = false;
+                for _ in 0..3 { if self.write(lorax::MODE, &[8]) { ok = true; } std::thread::sleep(Duration::from_millis(45)); }
+                ok
+            }
+            fn probe_live_format(&mut self) { let b = self.read(lorax::LIVE, 4); if let Some(f) = lorax::detect_live_format(b.as_deref()) { self.live_fmt = Some(f); } }
+            fn set_live_target(&mut self, f: f64) -> bool {
+                let c = f_to_c(clamp(f, MIN_F, MAX_F));
+                let first = self.live_fmt.unwrap_or(self.fmt);
+                for fm in [first, if first == Fmt::I10 { Fmt::F32 } else { Fmt::I10 }] {
+                    if self.write(lorax::LIVE, &lorax::encode_c(c, fm)) { self.live_fmt = Some(fm); return true; }
+                }
+                false
+            }
+        }
+    };
+}
+
+// the Bluetooth side: the same Bus / Seen / Ble on each system
+#[cfg(target_os = "linux")]
+use bluez as ble;
+#[cfg(windows)]
+use winble as ble;
+#[cfg(windows)]
+#[path = "heat_win.rs"]
+mod winble;
+
 /// BlueZ over the system D-Bus (zbus, pure Rust). Lubuntu's stock Bluetooth stack runs bluetoothd.
+#[cfg(target_os = "linux")]
 mod bluez {
     use super::*;
     use zbus::blocking::{Connection, MessageIterator, Proxy};
@@ -593,19 +682,14 @@ mod bluez {
                 if self.lost.load(std::sync::atomic::Ordering::Relaxed) { self.on = false; return Err("Device disconnected".into()); }
             }
         }
-        fn auth(&mut self) -> String {
-            match self.send(0, &[], 3.0) {
-                Ok((st, seed)) if st == 0 && seed.len() >= 16 => match self.send(1, &lorax::token(&seed), 3.0) {
-                    Ok((0, _)) => "ok".into(),
-                    Ok((st, _)) => format!("unlock returned status {st}"),
-                    Err(e) => if e.contains("timed out") { "no reply from device".into() } else { e },
-                },
-                Ok((st, _)) => format!("seed request returned status {st}"),
-                Err(e) => if e.contains("timed out") { "no reply from device".into() } else { e },
-            }
+        fn up(&mut self) -> bool {
+            if self.lost.load(std::sync::atomic::Ordering::Relaxed) { self.on = false; }
+            self.on
         }
-        fn read(&mut self, path: &str, max: u16) -> Option<Vec<u8>> { match self.send(16, &lorax::read_payload(path, max), 3.0) { Ok((0, d)) => Some(d), _ => None } }
-        fn write(&mut self, path: &str, bytes: &[u8]) -> bool { matches!(self.send(17, &lorax::write_payload(path, bytes), 3.0), Ok((0, _))) }
+        fn close(&mut self) {
+            self.on = false;
+            if let Ok(d) = self.bus.proxy(&self.path, DEV) { let _: Result<(), _> = d.call("Disconnect", &()); }
+        }
     }
     /// a failed Connect, in words: the usual cause is another phone or app holding the Puffco
     fn connect_hint(e: &str) -> String {
@@ -665,67 +749,7 @@ mod bluez {
         Ok(())
     }
 
-    impl Device for Ble {
-        fn name(&self) -> String { self.name.clone() }
-        fn id(&self) -> String { self.addr.clone() }
-        fn connected(&mut self) -> bool {
-            if self.lost.load(std::sync::atomic::Ordering::Relaxed) { self.on = false; }
-            self.on
-        }
-        fn disconnect(&mut self) {
-            self.on = false;
-            if let Ok(d) = self.bus.proxy(&self.path, DEV) { let _: Result<(), _> = d.call("Disconnect", &()); }
-        }
-        fn read_temp(&mut self) -> Option<f64> {
-            let order = if self.temp_path == lorax::TEMP_ALT { [lorax::TEMP_ALT, lorax::TEMP] } else { [lorax::TEMP, lorax::TEMP_ALT] };
-            for path in order {
-                let b = self.read(path, 4);
-                if let Some(c) = lorax::decode_c(b.as_deref(), Some(self.fmt)).filter(|c| *c > 0.0) { self.temp_path = path; return Some((c_to_f(c) * 10.0).round() / 10.0); }
-            }
-            None
-        }
-        fn read_state(&mut self) -> Option<i32> { self.read(lorax::STATE, 1).and_then(|b| b.first().map(|&x| x as i32)) }
-        fn read_battery(&mut self) -> Option<i64> { let b = self.read(lorax::SOC, 4); self.soc.decode(b.as_deref()) }
-        fn read_active_slot(&mut self) -> Option<u8> { self.read(lorax::ACTIVE_SLOT, 1).and_then(|b| b.first().copied()) }
-        fn set_active_slot(&mut self, s: u8) -> bool { self.write(lorax::ACTIVE_SLOT, &[s]) }
-        fn backup_slot(&mut self, s: u8) -> SlotBackup { SlotBackup { temp: self.read(&lorax::p_temp(s), 4), time: self.read(&lorax::p_time(s), 4) } }
-        fn restore_slot(&mut self, s: u8, b: &SlotBackup) {
-            if let Some(t) = b.temp.as_ref().filter(|t| t.len() >= 4) { self.write(&lorax::p_temp(s), &t[..4]); }
-            if let Some(t) = b.time.as_ref().filter(|t| t.len() >= 4) { self.write(&lorax::p_time(s), &t[..4]); }
-        }
-        fn write_profile_temp(&mut self, s: u8, f: f64) -> bool {
-            let c = f_to_c(clamp(f, MIN_F, MAX_F));
-            let other = if self.fmt == Fmt::I10 { Fmt::F32 } else { Fmt::I10 };
-            for fm in [self.fmt, other] {
-                if !self.write(&lorax::p_temp(s), &lorax::encode_c(c, fm)) { continue; }
-                if let Some(b) = self.read(&lorax::p_temp(s), 4) { if b.len() >= 4 && (lorax::decode_as(&b, fm) - c).abs() > 1.5 { continue; } }
-                self.fmt = fm;
-                return true;
-            }
-            false
-        }
-        /// Peak Pro: heat time in float seconds. Proxy units vary by firmware, so it's left alone and the run ends the session.
-        fn write_profile_time(&mut self, s: u8, secs: f64) -> bool {
-            if self.is_proxy { return false; }
-            if !self.write(&lorax::p_time(s), &lorax::f32_bytes(secs)) { return false; }
-            match self.read(&lorax::p_time(s), 4) { Some(r) if r.len() >= 4 => (lorax::f32v(&r) - secs).abs() <= 1.0, _ => true }
-        }
-        fn start(&mut self) -> bool { self.write(lorax::MODE, &[7]) }
-        fn stop(&mut self) -> bool {
-            let mut ok = false;
-            for _ in 0..3 { if self.write(lorax::MODE, &[8]) { ok = true; } std::thread::sleep(Duration::from_millis(45)); }
-            ok
-        }
-        fn probe_live_format(&mut self) { let b = self.read(lorax::LIVE, 4); if let Some(f) = lorax::detect_live_format(b.as_deref()) { self.live_fmt = Some(f); } }
-        fn set_live_target(&mut self, f: f64) -> bool {
-            let c = f_to_c(clamp(f, MIN_F, MAX_F));
-            let first = self.live_fmt.unwrap_or(self.fmt);
-            for fm in [first, if first == Fmt::I10 { Fmt::F32 } else { Fmt::I10 }] {
-                if self.write(lorax::LIVE, &lorax::encode_c(c, fm)) { self.live_fmt = Some(fm); return true; }
-            }
-            false
-        }
-    }
+    lorax_device!(Ble);
 }
 
 // ===================================================================== the worker and the UI side
@@ -799,7 +823,7 @@ impl Heat {
 
 struct Worker {
     rx: Receiver<Cmd>, ev: Sender<Event>, shared: Arc<Mutex<View>>,
-    dev: Option<Box<dyn Device>>, bus: Option<Arc<bluez::Bus>>, scan_until: Option<Instant>, auto: String,
+    dev: Option<Box<dyn Device>>, bus: Option<Arc<ble::Bus>>, scan_until: Option<Instant>, auto: String,
     phase: Phase, msg: String, live: Option<f64>, target: Option<f64>, t: Option<f64>, end: f64, battery: Option<i64>,
     drop: f64, puff: f64, puff_info: String, abort: bool, panel: bool, found: Vec<Found>, others: Vec<Found>, t0: Instant,
 }
@@ -901,7 +925,7 @@ impl Worker {
         self.found.clear(); self.others.clear();
         self.auto = auto;
         if self.bus.is_none() {
-            match bluez::Bus::new() { Ok(b) => self.bus = Some(Arc::new(b)), Err(e) => { self.say(&format!("Bluetooth: {e}. Try the simulator.")); return; } }
+            match ble::Bus::new() { Ok(b) => self.bus = Some(Arc::new(b)), Err(e) => { self.say(&format!("Bluetooth: {e}. Try the simulator.")); return; } }
         }
         let bus = self.bus.clone().unwrap();
         if let Err(e) = bus.start_scan() { self.bus = None; self.say(&e); return; }
@@ -937,10 +961,10 @@ impl Worker {
         self.stop_scan();
         let Some(bus) = self.bus.clone() else { return };
         self.say(&format!("Connecting to {}… (accept the pairing prompt if one comes up)", f.name));
-        let seen = bluez::Seen { path: f.path.clone(), addr: f.addr.clone(), name: f.name.clone(), puffco: true, connected: false };
+        let seen = ble::Seen { path: f.path.clone(), addr: f.addr.clone(), name: f.name.clone(), puffco: true, connected: false };
         let shared = self.shared.clone();
         let mut note = |m: &str| { if let Ok(mut v) = shared.lock() { v.msg = m.to_string(); } };
-        match bluez::Ble::connect(bus, &seen, &mut note) {
+        match ble::Ble::connect(bus, &seen, &mut note) {
             Ok(b) => { let _ = self.ev.send(Event::DeviceId(f.addr.clone())); self.connected(Box::new(b)); }
             Err(e) => self.say(&format!("Couldn't connect: {e}")),
         }

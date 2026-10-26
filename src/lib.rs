@@ -24,3 +24,5 @@ pub mod dialog;
 pub mod widgets;
 pub mod ui;
 pub mod uitest;
+#[cfg(windows)]
+pub mod win;

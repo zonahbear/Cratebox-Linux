@@ -7,7 +7,8 @@ conventions, or finish/start a piece of open work. Keep it under ~150 lines.
 
 Native Linux port of the Cratebox web app (and the iOS performance mode) in Rust (eframe/egui on glow, cpal for audio, midir for MIDI,
 symphonia for decoding). Two or four decks (deck layers 1⇄3 / 2⇄4), DDJ-FLX4 first, other Pioneer/AlphaTheta controllers via Mixxx-derived maps.
-Same behaviour and analysis as the web version, no browser or server. v0.1.0: passes its tests, not yet tried
+Same behaviour and analysis as the web version, no browser or server. The same crate also builds a Windows .exe
+(cfg-gated: `win.rs`, `heat_win.rs`; cross-compiled with MinGW). v0.1.0: passes its tests, not yet tried
 on real sound hardware or a controller. Built for x86-64-v3 CPUs.
 
 ## Map
@@ -39,6 +40,9 @@ src/ring.rs        lock-free ring buffer
 src/fx.rs          Beat FX / Pad FX DSP (FxUnit: one per channel insert + master), port of the iOS FxUnit
 src/beatfx.rs      BEAT FX unit + PAD FX state on the UI thread; sends beat clocks every 100 ms
 src/recorder.rs    REC: master → 16-bit WAV (ring from the audio thread, writer thread)
+src/heat_win.rs    HEAT's Bluetooth on Windows (WinRT BLE: watcher, GATT, pairing); same Bus/Seen/Ble shape as heat.rs's
+                   bluez module; the Lorax Device impl is shared via the `lorax_device!` macro in heat.rs
+src/win.rs         Windows only: MMCSS "Pro Audio" for the audio thread, message boxes, console attach, drive letters
 src/heat.rs        HEAT (TrueCurve mini): curve maths, driver, learner, PuffDrop, simulator, Lorax bytes,
                    BlueZ GATT via zbus (pure Rust, no libdbus), worker thread; port of iOS personal/heat
 src/uitest.rs      scripted UI driver: CRATEBOX_UITEST=script.json, output to CRATEBOX_UITEST_OUT
@@ -59,6 +63,7 @@ distro/            Cratebox OS ISO: build-iso.sh remasters Lubuntu 26.04.1 (laye
                    plymouth/make-theme.py draws the boot splash PNGs (committed). Calamares "Minimal" always unpacks
                    the full layer, then cratebox-minimal-install autoremoves Lubuntu's extras (list made in chroot-setup)
 .github/workflows/cratebox-app.yml manual-only: app binary → release "app-latest" (overlay/usr/bin/cratebox-update installs it)
+.github/workflows/cratebox-windows.yml manual-only: MinGW cross-build → release "windows-latest" (cratebox.exe)
 .github/workflows/cratebox-os.yml  manual-only ubuntu job → release "kiosk-latest" (ISO in <2 GiB parts)
 ```
 
@@ -73,6 +78,10 @@ distro/            Cratebox OS ISO: build-iso.sh remasters Lubuntu 26.04.1 (laye
 - `python3 tests/make_tracks.py tests/music` (needs numpy) then `cargo test --release`.
   Tests fall back to `../cratebox/tests/music` if `tests/music` is missing.
 - With no sound card the engine runs on a timer, so timing tests still work in containers.
+- Windows: `rustup target add x86_64-pc-windows-gnu`, `apt install mingw-w64`, `cargo build --release --target
+  x86_64-pc-windows-gnu` (one .exe, system DLLs only). Smoke test under Wine + Xvfb works (`wine explorer
+  /desktop=cb,WxH cratebox.exe --screenshot Z:\path.png 240`, CRATEBOX_DATA as a Z:\ path). On Windows `ui::fit_scale`
+  zooms everything to a 720-pt-high canvas (the MacBook's layout); CRATEBOX_FIT=1 does it on Linux.
 - No CI on pushes. Releases are built by hand with `./build-release.sh`; the Cratebox OS ISO by the manual
   cratebox-os workflow (Actions minutes are scarce: keep workflows `workflow_dispatch`).
 
@@ -112,6 +121,8 @@ distro/            Cratebox OS ISO: build-iso.sh remasters Lubuntu 26.04.1 (laye
 
 ## Open work (update this when it changes)
 
+- Windows build: only tested under Wine (UI, analysis, 4 decks, HEAT simulator); WASAPI latency/dropouts, FLX4 MIDI/audio
+  and WinRT BLE to a real Puffco untested on a real PC.
 - Untested on real audio hardware and a real FLX4; HEAT's BlueZ link untested on a real Puffco (simulator only).
 - Cratebox OS: builds on Actions (cratebox-os → release kiosk-latest). On the MacBook (Jonah): live speakers work;
   sleep/wake reconnect, a full install (normal and minimal), headphones, Claude sign-in and HEAT still to check.
