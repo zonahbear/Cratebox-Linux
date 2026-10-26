@@ -60,7 +60,7 @@ From Linux there is an untested fallback:
 | Boot service sets ALSA Master and PCM to 100%, on MacBook9,1/10,1 only | Settings verified. Applying them at every boot is new |
 | `mem_sleep_default=s2idle` (deep sleep kills the speakers until the next power-up) | Verified |
 | udev rule: no D3cold for the Apple NVMe at `0000:01:00.0` (otherwise sleep never wakes) | Verified |
-| `system-sleep/50-restart-pipewire`: after resume, restarts PipeWire for every logged-in user | Manual restart verified. This any-user hook is not |
+| `system-sleep/50-restart-pipewire`: after resume, restarts PipeWire for every logged-in user. Cratebox notices its output went dead and reconnects by itself (apps that don't do this must be restarted, as the brief found) | Manual restart verified. This any-user hook is not. Before the reconnect fix, Cratebox stayed silent after a wake (Jonah, 2026-10-26) |
 | Build fails if TLP, a `power_save` modprobe option or the old audio debug modprobe file shows up. pipewire, pipewire-pulse, wireplumber and rtkit are pinned as manually installed | Follows the brief's rules |
 | `applespi` + SPI modules in the dracut initramfs | Proposed. Keyboard/trackpad use the mainline `applespi` driver |
 
@@ -94,8 +94,8 @@ Then play through the speakers after a **warm reboot** and after a **cold boot**
 
 ## Not done
 
-- FaceTime HD camera driver, VA-API, hibernation and Bluetooth (the patched `hci_uart`) are left out,
-  to keep this scoped.
+- FaceTime HD camera driver, VA-API and hibernation are left out,
+  to keep this scoped. Bluetooth works with the stock drivers (Jonah, 2026-10-26).
 - MacBook8,1 (2015) isn't supported by the speaker driver.
 - The ISO contains Chrome, whose licence doesn't allow passing it around, so keep the release private.
 

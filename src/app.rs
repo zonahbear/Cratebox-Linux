@@ -88,6 +88,8 @@ pub struct App {
     last_flush: Instant,
     pub repaint: Option<Arc<dyn Fn() + Send + Sync>>,
     pub hp_note: String,
+    /// output that stopped and is being reopened: (device name, next attempt)
+    reconnect: Option<(String, Instant)>,
     pub scanning: usize,
 }
 
@@ -148,7 +150,7 @@ impl App {
             jobs_tx, jobs_rx, queue: VecDeque::new(), analysing: None, analysed_count: 0, deck_loads: Arc::new(AtomicUsize::new(0)),
             midi: midi::Engine::new(), midi_io: MidiIo::new(), last_keep: Instant::now(), last_led: Instant::now(),
             status: String::new(), status_until: Instant::now(), progress: String::new(), outputs, ui: UiState::default(), last_flush: Instant::now(),
-            repaint: None, hp_note: String::new(), scanning: 0,
+            repaint: None, hp_note: String::new(), reconnect: None, scanning: 0,
         };
         app.midi.use_profile("learn", vec![]);
         app.midi.four = app.store.settings.four;
@@ -537,6 +539,24 @@ impl App {
             Err(e) => self.say(&format!("Couldn't switch output: {e}"), 8.0),
         }
     }
+    /// a stream that stops being called (PipeWire restarted after a sleep/wake, device unplugged)
+    /// is closed and reopened on the same device every 2 s until it works
+    fn watch_output(&mut self) {
+        let now = Instant::now();
+        if self.reconnect.is_none() && self.audio.stalled() {
+            let dev = self.audio.device.clone();
+            self.audio.close();
+            self.reconnect = Some((dev, now + Duration::from_secs(1)));
+            self.say("Sound output stopped. Reconnecting…", 4.0);
+        }
+        let Some((dev, at)) = self.reconnect.clone() else { return };
+        if now < at { return; }
+        let buf = self.store.settings.buffer;
+        match self.audio.open(&dev, buf) {
+            Ok(()) => { self.reconnect = None; self.apply_headphones(false); self.say("Sound reconnected", 4.0); }
+            Err(_) => self.reconnect = Some((dev, now + Duration::from_secs(2))),
+        }
+    }
     pub fn refresh_outputs(&mut self) { self.outputs = list_outputs(); }
 
     // ======================= controller =======================
@@ -861,6 +881,7 @@ impl App {
         for i in 0..DECKS { self.decks[i].on_report(&snap.decks[i], snap.at); }
         while self.trash_rx.try_recv().is_ok() {} // finished-with audio buffers get freed here, not on the audio thread
         if let Some(e) = self.audio.take_error() { self.say(&format!("Sound output problem: {e}"), 8.0); }
+        self.watch_output();
         // sync follows the master's tempo and phase; FX clocks follow the decks
         for i in 0..DECKS { let p = self.peers(); self.decks[i].sync_tick(&p); self.decks[i].tick(); }
         let ck = self.clock_fn();

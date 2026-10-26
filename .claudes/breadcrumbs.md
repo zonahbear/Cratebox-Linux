@@ -32,3 +32,13 @@
   first callback, no RTTIME, warns once if it can't. Distro: group cratebox-rt, limits.d rtprio 70,
   cratebox-rt-users.service adds UID 1000-59999 users before the display manager (live user from casper too;
   the live layer has no /etc/group of its own, so the standard layer's group applies). PipeWire untouched.
+
+## 2026-10-26 evening: no sound after sleep/wake (Jonah, on the MacBook)
+
+- Live ISO speakers work on the MacBook10,1 (Jonah). Bluetooth works with stock drivers (Jonah).
+- After wake, 50-restart-pipewire restarts PipeWire; Cratebox's cpal stream then sat dead (no error, no
+  reopen). Fix: AudioIo counts callbacks per stream (`Beat`); App::watch_output closes + reopens the same
+  device when a stream hasn't been called for 1 s, retrying every 2 s. VM check: old binary kept the same
+  cpal thread after `systemctl --user restart pipewire ...`; new one reopened (new FIFO-70 thread,
+  alsa_playback.cb-new node registered with the new PipeWire).
+- 4 decks / wave mode / HEAT / FX / XDJ-like layout went to a separate thread.
