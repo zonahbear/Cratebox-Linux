@@ -1,5 +1,6 @@
-//! Deck logic on the UI thread: transport, CDJ-style cue, sync, quantize, loops, hot cues, beat
-//! jump, jog handling, master tempo and the beat-grid editor. Talks to the audio thread's player
+//! Deck logic on the UI thread: transport, CDJ-style cue, sync (any of four decks can lead; half/double
+//! time; beat lock), quantize, loops, hot cues, beat jump, jog handling, master tempo and the beat-grid
+//! editor. Sync is a port of the iOS app's DeckModel (itself the web app's Deck class). Talks to the audio thread's player
 //! through commands; side effects for the rest of the app (saving, messages) go out as events.
 
 use crate::analysis::{Phrase, Wave, ANALYSIS_VER};
@@ -17,7 +18,11 @@ pub const JUMPS: [f64; 8] = [-1.0, 1.0, -2.0, 2.0, -4.0, 4.0, -8.0, 8.0];
 pub const TICK_SEC: f64 = 1.8 / 720.0; // 33 1/3 RPM platter, 720 ticks per revolution
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum PadMode { HotCue, BeatLoop, BeatJump }
+pub enum PadMode { HotCue, BeatLoop, BeatJump, PadFx, PadFx2 }
+impl PadMode {
+    /// the FX bank (0 = FX1, 1 = FX2) for the PAD FX modes
+    pub fn fx_bank(self) -> Option<usize> { match self { PadMode::PadFx => Some(0), PadMode::PadFx2 => Some(1), _ => None } }
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum JogKind { Scratch, Bend, Search }
@@ -83,7 +88,16 @@ pub struct Deck {
     pub sync: bool,
     pub sync_since: Instant,
     pub sync_rate: f64,
-    /// set by the app: whether the other deck can lead this one right now
+    /// 0.5 / 1 / 2: half or double time against the master
+    pub sync_mult: f64,
+    /// the beat lock's tiny speed correction
+    sync_trim: f64,
+    /// the deck we follow while playing, and the track (load generation) it had when we locked on
+    sync_with: Option<usize>,
+    sync_track: u64,
+    /// how far our beats are from the master's (seconds), while beat-locked
+    pub phase_err: Option<f64>,
+    /// whether there's a deck to follow right now (else a synced deck leads at its own tempo)
     pub has_master: bool,
     pub cue: f64,
     pub hot: [Option<f64>; 8],
@@ -97,7 +111,7 @@ pub struct Deck {
     sent_rate: Option<f64>,
     pub coasting: bool,
     coast_hold: Instant,
-    pub started_at: Instant,
+    pub started_at: Option<Instant>,
     pub mt: bool,
     seek_seq: u64,
     taps: Vec<Instant>,
@@ -114,9 +128,9 @@ impl Deck {
         let now = Instant::now();
         Deck {
             i, tx, track: None, ana: None, duration: 0.0, sr: 44100.0, pos: 0.0, pos_t: now, speed: 0.0, playing: false, pitch: 0.0, range_idx: 0,
-            sync: false, sync_since: now, sync_rate: 1.0, has_master: false, cue: 0.0, hot: [None; 8], lp: Loop::default(), quant: true,
+            sync: false, sync_since: now, sync_rate: 1.0, sync_mult: 1.0, sync_trim: 0.0, sync_with: None, sync_track: 0, phase_err: None, has_master: false, cue: 0.0, hot: [None; 8], lp: Loop::default(), quant: true,
             pad_mode: PadMode::HotCue, previewing: false, touch: false, loading: false, loop_in_down: None, sent_rate: None, coasting: false,
-            coast_hold: now, started_at: now, mt: true, seek_seq: 0, taps: vec![], mono: None, rephrase_gen: 0, rephrase_at: None,
+            coast_hold: now, started_at: None, mt: true, seek_seq: 0, taps: vec![], mono: None, rephrase_gen: 0, rephrase_at: None,
             events: vec![], spin_secs: 2.5, load_gen: 0,
         }
     }
@@ -128,10 +142,16 @@ impl Deck {
     pub fn bpm(&self) -> f64 { self.ana.as_ref().map(|a| a.bpm).unwrap_or(0.0) }
     pub fn spb(&self) -> f64 { let b = self.bpm(); if b > 0.0 { 60.0 / b } else { 0.5 } }
     pub fn rate(&self) -> f64 {
-        if self.sync && self.has_master && self.bpm() > 0.0 { return self.sync_rate; }
+        // synced with nothing to follow: holds its tempo
+        if self.sync && self.bpm() > 0.0 { return self.sync_rate * (1.0 + self.sync_trim); }
         1.0 + self.pitch * self.range() / 100.0
     }
-    pub fn eff_bpm(&self) -> f64 { self.bpm() * self.rate() }
+    pub fn eff_bpm(&self) -> f64 { self.bpm() * self.rate() / if self.sync { 1.0 + self.sync_trim } else { 1.0 } }
+    /// what the other decks need to know about this one (for sync)
+    pub fn peer(&self, active: bool) -> Peer {
+        Peer { i: self.i, active, loaded: self.loaded(), bpm: self.bpm(), eff_bpm: self.eff_bpm(), beat: self.beat_at(self.now()), playing: self.playing,
+            sync: self.sync, sync_since: self.sync_since, gen: self.load_gen, touch: self.touch, coasting: self.coasting, previewing: self.previewing, started_at: self.started_at }
+    }
     /// with master tempo off, speeding up raises the key: 6% is about a semitone
     pub fn key_now(&self) -> i32 {
         match &self.ana {
@@ -169,6 +189,8 @@ impl Deck {
     pub fn begin_load(&mut self, t: Track) -> Result<u64, String> {
         if self.playing { return Err(format!("Deck {} is playing. Stop it before loading.", self.i + 1)); }
         self.loading = true;
+        // a new track: sync starts over (master and half/double time picked again), from the fader's tempo
+        self.sync_with = None; self.sync_trim = 0.0; self.sync_rate = 1.0 + self.pitch * self.range() / 100.0;
         self.track = Some(t);
         self.ana = None; self.mono = None; self.duration = 0.0;
         self.post(PlayerCmd::Unload); // free the previous track before decoding the next one
@@ -223,11 +245,12 @@ impl Deck {
         self.post(PlayerCmd::Seek { pos: t * self.sr, seq: self.seek_seq });
         self.pos = t * self.sr; self.pos_t = Instant::now();
     }
-    /// `master_playing_beat`: the master's beat position when it's playing (for phase alignment)
-    pub fn set_playing(&mut self, on: bool, master: Option<MasterInfo>) {
+    /// `peers`: every deck (this one included), for sync
+    pub fn set_playing(&mut self, on: bool, peers: &[Peer]) {
         if !self.loaded() { return; }
-        if on && self.sync { if let Some(m) = master { if m.playing { self.align_phase(m); } } }
-        if on && !self.playing { self.started_at = Instant::now(); }
+        if on && !self.playing && self.sync { self.sync_tick(peers); } // follow the master it would pick now, before it counts as playing
+        if on && self.sync { if let Some(m) = self.master(peers) { if m.playing { self.align_phase(m); } } }
+        if on && !self.playing { self.started_at = Some(Instant::now()); }
         self.playing = on;
         self.previewing = false;
         self.send_rate();
@@ -235,14 +258,14 @@ impl Deck {
         self.speed = if on { self.rate() } else { 0.0 };
         self.pos = self.now() * self.sr; self.pos_t = Instant::now();
     }
-    pub fn toggle_play(&mut self, m: Option<MasterInfo>) { let p = !self.playing; self.set_playing(p, m); }
+    pub fn toggle_play(&mut self, peers: &[Peer]) { let p = !self.playing; self.set_playing(p, peers); }
 
     /// CDJ-style CUE: while playing, return to the cue point and stop; while stopped, set it,
     /// or if already on it, play for as long as the button is held.
     pub fn cue_down(&mut self) {
         if !self.loaded() { return; }
         if self.playing {
-            self.set_playing(false, None);
+            self.set_playing(false, &[]);
             let c = self.cue; self.seek(c);
         } else if (self.now() - self.cue).abs() < 0.02 {
             self.previewing = true;
@@ -269,26 +292,61 @@ impl Deck {
     }
 
     // ---- sync ----
-    pub fn set_sync(&mut self, on: bool, m: Option<MasterInfo>) {
+    /// the deck to follow when synced. A playing deck only ever follows the playing deck it already follows:
+    /// it never picks up a new master mid-mix (a track loaded on another deck, a deck pressed into play), and
+    /// when its master stops or loads it keeps its tempo and leads (see sync_tick).
+    pub fn master(&self, peers: &[Peer]) -> Option<Peer> {
+        if self.sync && self.playing {
+            let w = peers.iter().find(|p| Some(p.i) == self.sync_with)?;
+            return (w.playing && w.gen == self.sync_track && self.followable(w)).then_some(*w);
+        }
+        self.pick_master(peers)
+    }
+    fn followable(&self, o: &Peer) -> bool {
+        o.i != self.i && o.active && o.loaded && o.bpm > 0.0 && !(o.sync && self.sync && o.sync_since > self.sync_since)
+    }
+    /// Two decks: the other one, unless it synced after us (then we lead). A playing deck only takes a playing one.
+    /// Four decks: prefer one that isn't synced itself, then one that's playing, then the one playing longest.
+    fn pick_master(&self, peers: &[Peer]) -> Option<Peer> {
+        let mut c: Vec<Peer> = peers.iter().filter(|o| self.followable(o) && (o.playing || !self.playing)).copied().collect();
+        let score = |o: &Peer| (if o.sync { 0 } else { 4 }) + (if o.playing { 2 } else { 0 });
+        c.sort_by(|a, b| score(b).cmp(&score(a)).then_with(|| match (a.started_at, b.started_at) {
+            (Some(x), Some(y)) => x.cmp(&y), (Some(_), None) => std::cmp::Ordering::Less, (None, Some(_)) => std::cmp::Ordering::Greater, _ => std::cmp::Ordering::Equal,
+        }).then(a.i.cmp(&b.i)));
+        c.first().copied()
+    }
+    /// of 1/2x, 1x and 2x the master's tempo, the one nearest our own
+    fn pick_mult(r: f64) -> f64 { [0.5, 1.0, 2.0].into_iter().fold(1.0, |best, k| if (r * k).ln().abs() < (r * best).ln().abs() { k } else { best }) }
+    pub fn set_sync(&mut self, on: bool, peers: &[Peer]) {
         if on && (!self.loaded() || self.bpm() <= 0.0) { return; }
         self.sync = on;
         if on {
             self.sync_since = Instant::now();
+            let m = self.pick_master(peers);
+            self.sync_with = m.map(|m| m.i); self.sync_track = m.map(|m| m.gen).unwrap_or(0);
+            self.has_master = m.is_some();
+            self.sync_rate = 1.0 + self.pitch * self.range() / 100.0; // with nothing to follow: stay at the fader's tempo
             match m {
-                None => self.say("Load a track on the other deck to sync to".into()),
+                None => self.say("Load a track on another deck to sync to".into()),
                 Some(m) => {
-                    self.has_master = true;
-                    self.sync_rate = (m.eff_bpm / self.bpm()).clamp(0.5, 2.0);
+                    let r = m.eff_bpm / self.bpm();
+                    self.sync_mult = Self::pick_mult(r);
+                    self.sync_rate = (r * self.sync_mult).clamp(0.5, 2.0);
+                    self.sync_trim = 0.0;
                     self.send_rate();
                     if self.playing && m.playing { self.align_phase(m); }
+                    if self.sync_mult != 1.0 {
+                        self.say(format!("Deck {} synced at {} time: {:.2} against {:.2}", self.i + 1, if self.sync_mult < 1.0 { "half" } else { "double" }, self.bpm() * self.sync_rate, m.eff_bpm));
+                    }
                 }
             }
-        }
+        } else { self.sync_trim = 0.0; self.phase_err = None; }
         self.send_rate();
     }
-    pub fn align_phase(&mut self, m: MasterInfo) {
-        if self.bpm() <= 0.0 { return; }
-        let frac = m.beat - m.beat.floor();
+    pub fn align_phase(&mut self, m: Peer) {
+        if self.bpm() <= 0.0 || m.bpm <= 0.0 { return; }
+        let mb = m.beat * self.sync_mult;
+        let frac = mb - mb.floor();
         let my_b = self.beat_at(self.now());
         let mut target = my_b.floor() + frac;
         if target - my_b > 0.5 { target -= 1.0; }
@@ -296,15 +354,48 @@ impl Deck {
         let t = self.time_of_beat(target);
         self.seek(t);
     }
-    /// keep following the master's tempo (called whenever either deck's tempo may have changed)
-    pub fn sync_tick(&mut self, m: Option<MasterInfo>) {
+    /// keep following the master's tempo and phase (called every frame)
+    pub fn sync_tick(&mut self, peers: &[Peer]) {
+        let m = self.master(peers);
         self.has_master = m.is_some();
-        if !self.sync { return; }
-        let Some(m) = m else { self.send_rate(); return };
-        if self.bpm() <= 0.0 { return; }
-        let r = (m.eff_bpm / self.bpm()).clamp(0.5, 2.0);
+        if !self.sync || self.bpm() <= 0.0 { return; }
+        let Some(m) = m else {
+            // the master stopped, loaded a new track or went away: keep this tempo and lead from here on (the
+            // oldest sync, so a deck that syncs now follows us, not the other way round)
+            if self.sync_with.is_some() {
+                self.sync_with = None;
+                if self.playing {
+                    let oldest = peers.iter().map(|p| p.sync_since).min().unwrap_or(self.sync_since);
+                    self.sync_since = oldest.checked_sub(Duration::from_millis(1)).unwrap_or(oldest);
+                }
+            }
+            if self.sync_trim != 0.0 { self.sync_trim = 0.0; self.send_rate(); }
+            self.phase_err = None;
+            return;
+        };
+        // a different master, or a new track on it: pick half/normal/double time again
+        if Some(m.i) != self.sync_with || m.gen != self.sync_track { self.sync_mult = Self::pick_mult(m.eff_bpm / self.bpm()); }
+        self.sync_with = Some(m.i); self.sync_track = m.gen;
+        let r = (m.eff_bpm * self.sync_mult / self.bpm()).clamp(0.5, 2.0);
         if (r - self.sync_rate).abs() > 1e-7 { self.sync_rate = r; }
         self.send_rate();
+        self.lock_phase(m);
+    }
+    /// Beat lock: while both decks play, measure how far our beats are from the master's and correct with a
+    /// tiny speed change. A deliberate offset of more than a quarter beat is left alone.
+    fn lock_phase(&mut self, m: Peer) {
+        let live = self.playing && m.playing && !self.touch && !m.touch && !self.coasting && !m.coasting && !self.previewing && !m.previewing && self.loaded() && m.loaded;
+        if !live { if self.sync_trim != 0.0 { self.sync_trim = 0.0; self.send_rate(); } self.phase_err = None; return; }
+        let mut err = self.beat_at(self.now()) - m.beat * self.sync_mult;
+        err -= (err + 0.5).floor();
+        let err_sec = err * self.spb() / self.rate().max(0.05);
+        self.phase_err = Some(err_sec);
+        let want = if err.abs() < 0.25 && err_sec.abs() > 0.0015 { (-err_sec / 1.5).clamp(-0.006, 0.006) } else { 0.0 };
+        let trim = self.sync_trim + (want - self.sync_trim) * 0.2;
+        if (trim - self.sync_trim).abs() > 1e-6 || (want == 0.0 && self.sync_trim != 0.0) {
+            self.sync_trim = if trim.abs() < 1e-5 { 0.0 } else { trim };
+            self.send_rate();
+        }
     }
     pub fn cycle_range(&mut self) {
         self.range_idx = (self.range_idx + 1) % RANGES.len();
@@ -312,7 +403,13 @@ impl Deck {
         let r = self.range();
         self.say(format!("Deck {} tempo range ±{}", self.i + 1, if r == 100.0 { "WIDE".to_string() } else { format!("{r}%") }));
     }
-    pub fn set_pitch(&mut self, v: f64) { self.pitch = v.clamp(-1.0, 1.0); self.send_rate(); }
+    pub fn set_pitch(&mut self, v: f64) {
+        let p = v.clamp(-1.0, 1.0);
+        // a synced deck that leads (nothing to follow) holds its own tempo: the fader moves it from there
+        if self.sync && self.bpm() > 0.0 && !self.has_master { self.sync_rate = (self.sync_rate + (p - self.pitch) * self.range() / 100.0).clamp(0.5, 2.0); }
+        self.pitch = p;
+        self.send_rate();
+    }
 
     // ---- jog ----
     pub fn jog_touch(&mut self, on: bool, no_coast: bool) {
@@ -399,6 +496,7 @@ impl Deck {
             PadMode::HotCue => if shift { self.clear_hot(p) } else { self.hotcue(p) },
             PadMode::BeatLoop => self.beat_loop(LOOP_SIZES[p]),
             PadMode::BeatJump => self.beat_jump(JUMPS[p]),
+            PadMode::PadFx | PadMode::PadFx2 => {} // the app runs PAD FX (it owns the FX units)
         }
     }
 
@@ -504,15 +602,26 @@ impl Deck {
     }
 }
 
-/// what a synced deck needs to know about the deck it follows
+/// what a synced deck needs to know about another deck
 #[derive(Clone, Copy, Debug)]
-pub struct MasterInfo { pub eff_bpm: f64, pub beat: f64, pub playing: bool }
-
-/// the deck `d` follows when synced: the other deck, unless it synced after us (then we lead)
-pub fn master_for(d: &Deck, o: &Deck) -> Option<MasterInfo> {
-    if !o.loaded() || o.bpm() <= 0.0 { return None; }
-    if o.sync && d.sync && o.sync_since > d.sync_since { return None; }
-    Some(MasterInfo { eff_bpm: o.eff_bpm(), beat: o.beat_at(o.now()), playing: o.playing })
+pub struct Peer {
+    pub i: usize,
+    /// shown (decks 3 and 4 only in 4-deck mode)
+    pub active: bool,
+    pub loaded: bool,
+    pub bpm: f64,
+    pub eff_bpm: f64,
+    /// beat position now
+    pub beat: f64,
+    pub playing: bool,
+    pub sync: bool,
+    pub sync_since: Instant,
+    /// load generation: a new track on it counts as a new master
+    pub gen: u64,
+    pub touch: bool,
+    pub coasting: bool,
+    pub previewing: bool,
+    pub started_at: Option<Instant>,
 }
 
 #[cfg(test)]
@@ -548,13 +657,22 @@ mod tests {
         a.set_pitch(1.0); // bottom of the fader... (the app maps the slider)
         assert!((a.rate() - 1.06).abs() < 1e-12);
         a.set_pitch(0.0);
-        let m = master_for(&b, &a);
-        b.set_sync(true, m);
+        let peers = |a: &Deck, b: &Deck| [a.peer(true), b.peer(true)];
+        b.set_sync(true, &peers(&a, &b));
         assert!((b.eff_bpm() - 126.0).abs() < 1e-9, "synced to {}", b.eff_bpm());
         a.set_pitch(0.5);
-        let m = master_for(&b, &a);
-        b.sync_tick(m);
+        b.sync_tick(&peers(&a, &b));
         assert!((b.eff_bpm() - a.eff_bpm()).abs() < 1e-9);
+        // a 70 BPM track syncs at half time to a 140 one (one of its beats per two of the master's)
+        let (mut c, _rc) = loaded(2, 70.0);
+        let (h, _rh) = loaded(3, 140.0);
+        c.set_sync(true, &[h.peer(true), c.peer(true)]);
+        assert_eq!(c.sync_mult, 0.5);
+        assert!((c.eff_bpm() - 70.0).abs() < 1e-9, "plays at its own tempo: {}", c.eff_bpm());
+        // a hidden deck is never the master
+        let (mut d, _rd) = loaded(0, 126.0);
+        d.set_sync(true, &[h.peer(false), d.peer(true)]);
+        assert!(!d.has_master);
     }
     #[test]
     fn grid_edit_keeps_the_beat_under_the_playhead() {

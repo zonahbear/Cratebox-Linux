@@ -19,7 +19,10 @@ pub const LOOP: Color32 = Color32::from_rgb(0xf5, 0xd6, 0x4a);
 pub const GREEN: Color32 = Color32::from_rgb(0x3d, 0xdc, 0x84);
 pub const RED: Color32 = Color32::from_rgb(0xff, 0x3b, 0x55);
 pub const WAVE_BG: Color32 = Color32::from_rgb(0x05, 0x06, 0x08);
-pub fn deck_color(i: usize) -> Color32 { if i == 0 { Color32::from_rgb(0x39, 0xa7, 0xff) } else { Color32::from_rgb(0xff, 0x8a, 0x3d) } }
+/// the web app's deck colours: 1 blue, 2 orange, 3 teal, 4 magenta
+pub fn deck_color(i: usize) -> Color32 {
+    match i { 0 => Color32::from_rgb(0x39, 0xa7, 0xff), 1 => Color32::from_rgb(0xff, 0x8a, 0x3d), 2 => Color32::from_rgb(0x2f, 0xd3, 0xc0), _ => Color32::from_rgb(0xe1, 0x5b, 0xd2) }
+}
 pub fn rgb(c: [u8; 3]) -> Color32 { Color32::from_rgb(c[0], c[1], c[2]) }
 pub fn mono(size: f32) -> FontId { FontId::monospace(size) }
 pub fn prop(size: f32) -> FontId { FontId::proportional(size) }
@@ -54,6 +57,15 @@ pub fn tag(ui: &mut Ui, text: &str, lit: bool, color: Color32) -> Response {
     p.text(rect.center(), egui::Align2::CENTER_CENTER, text, prop(11.5), if lit { color } else { MUTED });
     r
 }
+/// a pad-mode tab: an underline in the deck colour when it's the mode
+pub fn tab(ui: &mut Ui, text: &str, size: Vec2, lit: bool, color: Color32, font: f32) -> Response {
+    let (rect, r) = ui.allocate_exact_size(size, Sense::click());
+    let p = ui.painter();
+    p.rect_filled(rect, 3.0, if lit { Color32::from_rgba_unmultiplied(color.r(), color.g(), color.b(), 40) } else if r.hovered() { Color32::from_rgb(0x23, 0x28, 0x31) } else { RAISE });
+    if lit { p.rect_filled(Rect::from_min_size(pos2(rect.left(), rect.bottom() - 2.0), vec2(rect.width(), 2.0)), 0.0, color); }
+    p.text(rect.center(), egui::Align2::CENTER_CENTER, text, bold(font), if lit { color } else { MUTED });
+    r
+}
 pub fn round_button(ui: &mut Ui, text: &str, d: f32, lit: bool, accent: Color32) -> Response {
     let (rect, r) = ui.allocate_exact_size(vec2(d, d), Sense::click_and_drag());
     let p = ui.painter();
@@ -76,14 +88,17 @@ pub fn knob(ui: &mut Ui, v: &mut f32, label: &str, color: Color32, default: f32,
         if r.double_clicked() { *v = default; r.mark_changed(); }
         if r.hovered() {
             let s = ui.input(|i| i.smooth_scroll_delta.y);
-            if s != 0.0 { *v = (*v + s.signum() * 0.03).clamp(0.0, 1.0); r.mark_changed(); }
+            // a trackpad's two-finger scroll comes in many small steps: follow it, not one notch per event
+            let fine = ui.input(|i| i.modifiers.shift);
+            if s != 0.0 { *v = (*v + s / if fine { 1200.0 } else { 300.0 }).clamp(0.0, 1.0); r.mark_changed(); }
         }
     }
     let p = ui.painter();
+    // as big as the space allows (the arc rides the edge, the cap sits inside it)
     let c = pos2(rect.center().x, rect.top() + size / 2.0 + 2.0);
-    let rad = size / 2.0 - 3.0;
+    let rad = (size / 2.0 + 1.0).min(rect.width() / 2.0 - 1.0);
     p.circle_filled(c, rad - 3.0, Color32::from_rgb(0x25, 0x2a, 0x32));
-    p.circle_stroke(c, rad - 3.0, Stroke::new(1.0_f32, Color32::from_rgb(0x3a, 0x41, 0x4c)));
+    p.circle_stroke(c, rad - 3.0, Stroke::new(1.0_f32, if r.hovered() || r.dragged() { color } else { Color32::from_rgb(0x3a, 0x41, 0x4c) }));
     let ang = |t: f32| (-135.0 + 270.0 * t) * PI / 180.0;
     let arc = |a0: f32, a1: f32, col: Color32| {
         let n = ((a1 - a0).abs() * 20.0) as usize + 2;
@@ -101,14 +116,17 @@ pub fn knob(ui: &mut Ui, v: &mut f32, label: &str, color: Color32, default: f32,
 }
 
 /// a vertical fader 0 (bottom) .. 1 (top)
+/// a vertical fader for a trackpad: grab and slide (it moves with the hand, it doesn't jump to the click),
+/// Shift = fine, two-finger scroll nudges, double-click centres the tempo
 pub fn vslider(ui: &mut Ui, v: &mut f32, size: Vec2, center_line: bool, frozen: bool) -> Response {
     let (rect, mut r) = ui.allocate_exact_size(size, Sense::click_and_drag());
     if !frozen {
-        if let Some(pp) = r.interact_pointer_pos() {
-            if r.dragged() || r.drag_started() || r.clicked() {
-                *v = (1.0 - (pp.y - rect.top() - 6.0) / (rect.height() - 12.0)).clamp(0.0, 1.0);
-                r.mark_changed();
-            }
+        let fine = ui.input(|i| i.modifiers.shift);
+        let span = (rect.height() - 12.0).max(10.0) * if fine { 4.0 } else { 1.0 };
+        if r.dragged() { let dy = r.drag_delta().y; if dy != 0.0 { *v = (*v - dy / span).clamp(0.0, 1.0); r.mark_changed(); } }
+        if r.hovered() && !r.dragged() {
+            let s = ui.input(|i| i.smooth_scroll_delta.y);
+            if s != 0.0 { *v = (*v + s / (span * 2.0)).clamp(0.0, 1.0); r.mark_changed(); }
         }
         if r.double_clicked() && center_line { *v = 0.5; r.mark_changed(); }
     }
@@ -118,15 +136,21 @@ pub fn vslider(ui: &mut Ui, v: &mut f32, size: Vec2, center_line: bool, frozen: 
     if center_line { p.hline(rect.x_range(), rect.center().y, Stroke::new(1.0_f32, LINE2)); }
     let y = rect.top() + 6.0 + (1.0 - *v) * (rect.height() - 12.0);
     let th = Rect::from_center_size(pos2(rect.center().x, y), vec2(size.x - 4.0, 12.0));
-    p.rect_filled(th, 2.0, Color32::from_rgb(0xc9, 0xcf, 0xd8));
+    p.rect_filled(th, 2.0, if r.hovered() || r.dragged() { FG } else { Color32::from_rgb(0xc9, 0xcf, 0xd8) });
     p.hline(th.x_range(), y, Stroke::new(1.0_f32, BG));
     r
 }
+/// a horizontal fader: grab and slide, Shift = fine, two-finger scroll (either way) nudges, double-click centres
 pub fn hslider(ui: &mut Ui, v: &mut f32, size: Vec2, frozen: bool) -> Response {
     let (rect, mut r) = ui.allocate_exact_size(size, Sense::click_and_drag());
     if !frozen {
-        if let Some(pp) = r.interact_pointer_pos() {
-            if r.dragged() || r.drag_started() || r.clicked() { *v = ((pp.x - rect.left() - 8.0) / (rect.width() - 16.0)).clamp(0.0, 1.0); r.mark_changed(); }
+        let fine = ui.input(|i| i.modifiers.shift);
+        let span = (rect.width() - 16.0).max(10.0) * if fine { 4.0 } else { 1.0 };
+        if r.dragged() { let dx = r.drag_delta().x; if dx != 0.0 { *v = (*v + dx / span).clamp(0.0, 1.0); r.mark_changed(); } }
+        if r.hovered() && !r.dragged() {
+            let d = ui.input(|i| i.smooth_scroll_delta);
+            let s = if d.x.abs() > d.y.abs() { d.x } else { d.y };
+            if s != 0.0 { *v = (*v + s / (span * 2.0)).clamp(0.0, 1.0); r.mark_changed(); }
         }
         if r.double_clicked() { *v = 0.5; r.mark_changed(); }
     }
@@ -134,7 +158,7 @@ pub fn hslider(ui: &mut Ui, v: &mut f32, size: Vec2, frozen: bool) -> Response {
     p.rect_filled(Rect::from_center_size(rect.center(), vec2(rect.width() - 8.0, 4.0)), 2.0, Color32::from_rgb(0x07, 0x08, 0x0a));
     let x = rect.left() + 8.0 + *v * (rect.width() - 16.0);
     let th = Rect::from_center_size(pos2(x, rect.center().y), vec2(14.0, size.y - 4.0));
-    p.rect_filled(th, 2.0, Color32::from_rgb(0xc9, 0xcf, 0xd8));
+    p.rect_filled(th, 2.0, if r.hovered() || r.dragged() { FG } else { Color32::from_rgb(0xc9, 0xcf, 0xd8) });
     p.vline(x, th.y_range(), Stroke::new(1.0_f32, BG));
     r
 }
@@ -300,7 +324,6 @@ pub fn paint_lane(p: &egui::Painter, rect: Rect, d: &Deck, i: usize, zoom: f64, 
     }
     // playhead
     p.rect_filled(Rect::from_min_size(pos2(cx - 1.0, rect.top()), vec2(2.0, rect.height())), 0.0, RED);
-    p.text(pos2(rect.right() - 8.0, rect.top() + 12.0), egui::Align2::RIGHT_CENTER, format!("{:.2}", d.eff_bpm()), mono(12.0), Color32::from_white_alpha(230));
 }
 
 /// the whole-track overview with phrase strip, cues, loop and playhead

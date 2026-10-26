@@ -4,13 +4,15 @@
 
 use crate::analysis::{analyze, fold_bpm, mono_for, phrase_analysis, Opts, Phrase, BPM_RANGES};
 use crate::audio_io::{guess_controller_output, list_outputs, AudioIo, OutDev};
-use crate::deck::{build_overview, master_for, Deck, DeckAna, DeckEvent, JogKind, PadMode, MasterInfo};
+use crate::beatfx::BeatFx;
+use crate::deck::{build_overview, Deck, DeckAna, DeckEvent, JogKind, PadMode, Peer};
+use crate::fx::FxClock;
 use crate::decode::{decode, resample};
 use crate::engine::{Cmd, Engine, Shared, Status};
 use crate::library::{is_audio, make_track, read_id3, scan_dir, Cached, Cues, ListState, Track};
 use crate::midi::{self, Action, Entry};
 use crate::midi_io::MidiIo;
-use crate::mixer::{MixerParams, Route};
+use crate::mixer::{MixerParams, Route, DECKS};
 use crate::player::Pcm;
 use crate::playlists::{self, rb_cues_for, read_device_analysis, Device, Lists, RowKind, TreeRow, View};
 use crate::store::Store;
@@ -35,8 +37,8 @@ pub struct AnaResult { pub bpm: f64, pub first_beat: f64, pub key: i32, pub phra
 /// UI-only state the app logic also touches (dialogs, editing)
 #[derive(Default)]
 pub struct UiState {
-    pub grid_open: [bool; 2],
-    pub bpm_text: [String; 2],
+    pub grid_open: [bool; DECKS],
+    pub bpm_text: [String; DECKS],
     pub settings_open: bool,
     pub renaming: Option<(String, String, bool)>,
     pub confirm_delete: Option<String>,
@@ -52,8 +54,13 @@ pub struct App {
     pub status_snap: Status,
     pub audio: AudioIo,
     trash_rx: Receiver<Pcm>,
-    pub decks: [Deck; 2],
+    pub decks: [Deck; DECKS],
     pub mixer: MixerParams,
+    pub fx: BeatFx,
+    /// soft takeover after a layer switch: control/deck -> the last hardware value seen (None = none yet)
+    pickup: HashMap<(String, usize), Option<f64>>,
+    pub rec: Option<crate::recorder::Recorder>,
+    pub heat: crate::heat::Heat,
     pub route: Route,
     pub tracks: Vec<Track>,
     pub by_id: HashMap<String, usize>,
@@ -94,6 +101,13 @@ pub fn now_date() -> String {
     let (y, m, d) = civil(days);
     format!("{y:04}-{m:02}-{d:02}")
 }
+/// "2026-10-26 18-05-09" in local time, for recording names
+pub fn local_stamp() -> String {
+    let t = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0) as libc::time_t;
+    let mut tm: libc::tm = unsafe { std::mem::zeroed() };
+    unsafe { libc::localtime_r(&t, &mut tm); }
+    format!("{:04}-{:02}-{:02} {:02}-{:02}-{:02}", tm.tm_year + 1900, tm.tm_mon + 1, tm.tm_mday, tm.tm_hour, tm.tm_min, tm.tm_sec)
+}
 fn civil(z: i64) -> (i64, u32, u32) {
     let z = z + 719468;
     let era = z.div_euclid(146097);
@@ -122,13 +136,16 @@ impl App {
         let mut audio = AudioIo::new(engine, sr);
         let open_err = audio.open(&want, s.buffer).err();
         let (jobs_tx, jobs_rx) = channel();
-        let mut decks = [Deck::new(0, tx.clone()), Deck::new(1, tx.clone())];
-        for (i, d) in decks.iter_mut().enumerate() { d.mt = s.mt[i]; d.spin_secs = s.spin; d.sr = sr; }
+        let mut decks: [Deck; DECKS] = std::array::from_fn(|i| Deck::new(i, tx.clone()));
+        for (i, d) in decks.iter_mut().enumerate() { d.mt = s.mt.get(i).copied().unwrap_or(true); d.spin_secs = s.spin; d.sr = sr; }
+        let fx = BeatFx::new(tx.clone(), &s.bfx_fx, s.bfx_depth, s.bfx_ch, &s.bfx_beats);
+        let mut mixer = MixerParams::default();
+        mixer.active = [true, true, s.four, s.four];
         let mut lists = Lists::default();
         lists.lists = store.playlists.clone();
         lists.open = s.pl_open.iter().cloned().collect();
         let mut app = App {
-            tx, shared, status_snap: Status::default(), audio, trash_rx, decks, mixer: MixerParams::default(), route: Route::Master,
+            tx, shared, status_snap: Status::default(), audio, trash_rx, decks, mixer, fx, pickup: HashMap::new(), rec: None, heat: crate::heat::Heat::new(), route: Route::Master,
             tracks: vec![], by_id: HashMap::new(), list: ListState::new(), lists, view: View::All, focus_tree: false, tree_sel: 0, store,
             jobs_tx, jobs_rx, queue: VecDeque::new(), analysing: None, analysed_count: 0, deck_loads: Arc::new(AtomicUsize::new(0)),
             midi: midi::Engine::new(), midi_io: MidiIo::new(), last_keep: Instant::now(), last_led: Instant::now(),
@@ -136,6 +153,8 @@ impl App {
             repaint: None, hp_note: String::new(), reconnect: None, scanning: 0,
         };
         app.midi.use_profile("learn", vec![]);
+        app.midi.four = app.store.settings.four;
+        for d in app.decks.iter() { let _ = app.tx.send(Cmd::Deck(d.i, crate::player::PlayerCmd::Mt(d.mt))); }
         let _ = app.tx.send(Cmd::Mixer(app.mixer));
         app.apply_headphones(false);
         match open_err {
@@ -273,6 +292,7 @@ impl App {
     }
     pub fn load_id(&mut self, deck: usize, id: &str) { if let Some(t) = self.track(id).cloned() { self.load_track(deck, t); } }
     pub fn load_track(&mut self, i: usize, t: Track) {
+        if !self.deck_active(i) { self.say(&format!("Deck {} is hidden: turn on 4 DECKS first", i + 1), 4.0); return; }
         if t.missing { self.say(&format!("\"{}\" isn't in a connected folder or device right now", t.title), 5.0); return; }
         let t = self.track(&t.id).cloned().unwrap_or(t);
         let gen = match self.decks[i].begin_load(t.clone()) { Ok(g) => g, Err(e) => { self.say(&e, 4.0); return; } };
@@ -561,6 +581,8 @@ impl App {
     pub fn pick_profile(&mut self, id: &str) {
         self.use_profile(id);
         if !self.midi_io.name.is_empty() { self.store.settings.profile_for.insert(self.midi_io.name.clone(), id.to_string()); self.store.dirty_settings = true; }
+        // ask the controller where its knobs and faders are (FLX4, DDJ-400/200, SB3)
+        if let Some(init) = self.midi.profile_info().init { self.midi_io.send(init); }
     }
     pub fn pick_midi_in(&mut self, name: &str) {
         self.store.settings.midi_in = name.to_string();
@@ -616,15 +638,148 @@ impl App {
     }
     pub fn stop_learn(&mut self) { self.midi.stop_learn(); self.ui.learn_pick = None; self.say("", 0.1); }
 
-    fn master(&self, i: usize) -> Option<MasterInfo> { master_for(&self.decks[i], &self.decks[1 - i]) }
-    pub fn toggle_play(&mut self, i: usize) { let m = self.master(i); self.decks[i].toggle_play(m); }
-    pub fn set_sync(&mut self, i: usize, on: bool) { let m = self.master(i); self.decks[i].set_sync(on, m); }
+    // ======================= REC =======================
+    pub fn toggle_rec(&mut self) {
+        match self.rec.take() {
+            Some(r) => {
+                let _ = self.tx.send(Cmd::Record(None));
+                let secs = r.seconds();
+                let p = r.stop();
+                self.say(&format!("Recording saved: {} ({}:{:02})", p.display(), secs as u64 / 60, secs as u64 % 60), 10.0);
+            }
+            None => {
+                let dir = if self.store.settings.rec_dir.is_empty() { crate::recorder::default_dir() } else { PathBuf::from(&self.store.settings.rec_dir) };
+                match crate::recorder::Recorder::start(&dir, self.audio.sr, &format!("Cratebox {}", local_stamp())) {
+                    Ok((r, p)) => { let _ = self.tx.send(Cmd::Record(Some(p))); self.say(&format!("Recording the master to {}", r.path.display()), 5.0); self.rec = Some(r); }
+                    Err(e) => self.say(&e, 8.0),
+                }
+            }
+        }
+    }
+
+    // ======================= decks: 4-deck mode, sync, FX =======================
+    // ======================= HEAT =======================
+    /// presets (unless a pasted curve has the same name), then the pasted ones
+    pub fn heat_names(&self) -> (Vec<String>, Vec<String>) {
+        let saved = &self.store.settings.heat_curves;
+        let mut own: Vec<String> = saved.keys().cloned().collect();
+        own.sort_by_key(|n| n.to_lowercase());
+        (crate::heat::PRESETS.iter().map(|p| p.0.to_string()).filter(|n| !saved.contains_key(n)).collect(), own)
+    }
+    pub fn heat_curve(&self, name: &str) -> crate::heat::CurveDef {
+        if let Some(c) = self.store.settings.heat_curves.get(name).filter(|c| c.points.len() >= 2) { return c.clone(); }
+        crate::heat::preset(name).unwrap_or_else(|| crate::heat::preset(crate::heat::DEFAULT_NAME).unwrap())
+    }
+    /// Start the picked curve, or Stop whatever runs
+    pub fn heat_toggle(&mut self) {
+        if self.heat.running() { self.heat.stop(); return; }
+        let name = self.store.settings.heat_last.clone();
+        let model = self.store.settings.heat_models.get(&self.heat.view.dev_id).copied().unwrap_or_default();
+        let def = self.heat_curve(&name);
+        self.heat.run(&name, def, model);
+    }
+    pub fn heat_hold(&mut self) {
+        if self.heat.running() { self.heat.stop(); return; }
+        let s = &self.store.settings;
+        self.heat.hold(s.heat_hold_f, s.heat_puff_full);
+    }
+    /// TrueCurve's "Copy curves for Cratebox" JSON
+    pub fn heat_paste(&mut self, text: &str) -> String {
+        let Some(got) = crate::heat::parse_curves(text) else { return "That isn't TrueCurve's curve list.".into() };
+        if got.is_empty() { return "No curves found in that text.".into(); }
+        let n = got.len();
+        self.store.settings.heat_curves.extend(got);
+        self.store.dirty_settings = true;
+        format!("Added {n} curve{}.", if n > 1 { "s" } else { "" })
+    }
+
+    pub fn deck_active(&self, i: usize) -> bool { i < 2 || self.store.settings.four }
+    pub fn four(&self) -> bool { self.store.settings.four }
+    pub fn peers(&self) -> [Peer; DECKS] { std::array::from_fn(|i| self.decks[i].peer(self.deck_active(i))) }
+    pub fn toggle_play(&mut self, i: usize) { let p = self.peers(); self.decks[i].toggle_play(&p); }
+    pub fn set_playing(&mut self, i: usize, on: bool) { let p = self.peers(); self.decks[i].set_playing(on, &p); }
+    pub fn set_sync(&mut self, i: usize, on: bool) { let p = self.peers(); self.decks[i].set_sync(on, &p); }
+    /// the deck a synced deck `i` follows, if any (for the MASTER tags)
+    pub fn tempo_master(&self) -> Option<usize> {
+        let p = self.peers();
+        self.decks.iter().filter(|d| d.sync && self.deck_active(d.i)).find_map(|d| d.master(&p).map(|m| m.i))
+    }
+    pub fn set_four(&mut self, on: bool) {
+        self.store.settings.four = on;
+        self.store.dirty_settings = true;
+        self.mixer.active = [true, true, on, on];
+        self.send_mixer();
+        self.midi.four = on;
+        if !on {
+            for i in 2..DECKS { if self.decks[i].playing { self.set_playing(i, false); } self.fx.release_deck(i); }
+            for s in 0..2 { if let Some(crate::midi::Action::Side { side, from, to }) = self.midi.set_side(s, s) { self.on_side(side, from, to); } }
+            if self.fx.ch >= 2 && self.fx.ch < DECKS { let c = self.fx.ch - 2; let ck = self.clock_fn(); self.fx.channel(c, &ck); }
+        }
+        self.say(if on { "4 decks: decks 3 and 4 are on the outer channels (3 left, 4 right). Layer buttons switch the controller's sides." } else { "2 decks" }, 5.0);
+    }
+    /// the audio clock now (seconds), from the last report and the time since
+    pub fn audio_clock(&self) -> f64 { self.status_snap.time + self.status_snap.at.elapsed().as_secs_f64() }
+    /// the beat clock for an FX insert: its deck's; the master's is the deck the mix follows
+    pub fn fx_clock(&self, u: usize) -> FxClock {
+        let d = if u < DECKS { &self.decks[u] } else {
+            let lead = self.tempo_master();
+            let loud = self.decks.iter().filter(|d| self.deck_active(d.i) && d.playing && d.loaded())
+                .max_by(|a, b| self.mixer.fader[a.i].partial_cmp(&self.mixer.fader[b.i]).unwrap_or(std::cmp::Ordering::Equal)).map(|d| d.i);
+            &self.decks[lead.or(loud).or_else(|| self.decks.iter().position(|d| d.loaded())).unwrap_or(0)]
+        };
+        let bpm = if d.bpm() > 0.0 { d.eff_bpm() } else { 120.0 };
+        let playing = d.playing && d.loaded();
+        FxClock { t0: self.audio_clock(), beat0: if d.bpm() > 0.0 { d.beat_at(d.now()) } else { 0.0 }, bps: if playing { bpm / 60.0 } else { 0.0 }, spb: 60.0 / bpm }
+    }
+    /// a snapshot of every FX clock (so BeatFx can be borrowed mutably while sending them)
+    pub fn clock_fn(&self) -> impl Fn(usize) -> FxClock {
+        let c: Vec<FxClock> = (0..=DECKS).map(|u| self.fx_clock(u)).collect();
+        move |u| c[u.min(DECKS)]
+    }
+    pub fn fx_select(&mut self, step: i32) { let c = self.clock_fn(); if let Some(m) = self.fx.select_step(step, &c) { self.say(&m, 3.0); } }
+    pub fn fx_pick(&mut self, k: crate::fx::FxKind) { let c = self.clock_fn(); self.fx.select(k, &c); }
+    pub fn fx_beat(&mut self, step: i32) { let c = self.clock_fn(); self.fx.beat_step(step, &c); }
+    pub fn fx_channel(&mut self, ch: usize) { let c = self.clock_fn(); self.fx.channel(ch, &c); }
+    pub fn fx_on(&mut self, on: bool) { let c = self.clock_fn(); self.fx.set_on(on, &c); }
+    pub fn fx_depth(&mut self, v: f64) { let c = self.clock_fn(); self.fx.set_depth(v, &c); }
+    pub fn pad_down(&mut self, i: usize, p: usize, shift: bool) {
+        match self.decks[i].pad_mode.fx_bank() {
+            Some(b) => { let c = self.clock_fn(); self.fx.pad_down(i, b, p, &c); }
+            None => self.decks[i].pad_press(p, shift),
+        }
+    }
+    pub fn pad_up(&mut self, i: usize, p: usize) { if let Some(b) = self.decks[i].pad_mode.fx_bank() { self.fx.pad_up(i, b, p); } }
+    /// a layer button moved a side of the controller to another deck
+    fn on_side(&mut self, side: usize, from: usize, to: usize) {
+        self.decks[from].jog_touch(false, true); // let go of the platter on the deck being left
+        for n in crate::midi::PICKUP { self.pickup.insert((n.to_string(), to), None); }
+        if let Some(d) = self.midi.lever_deck() { self.fx_channel(d.unwrap_or(DECKS)); }
+        if !self.midi_io.name.is_empty() {
+            self.say(&format!("Controller {} side: deck {}. Faders and knobs take over once they reach deck {}'s settings.", if side == 1 { "right" } else { "left" }, to + 1, to + 1), 5.0);
+        }
+    }
+    /// soft takeover: after a layer switch, a hardware control only takes over once it reaches the deck's
+    /// setting (or crosses it), so nothing jumps
+    fn picked_up(&mut self, name: &str, deck: usize, val: f64) -> bool {
+        let k = (name.to_string(), deck);
+        let Some(prev) = self.pickup.get(&k).copied() else { return true };
+        let cur = match name {
+            "tempo" => (self.decks[deck].pitch + 1.0) / 2.0, "fader" => self.mixer.fader[deck] as f64, "trim" => self.mixer.trim[deck] as f64,
+            "hi" => self.mixer.hi[deck] as f64, "mid" => self.mixer.mid[deck] as f64, "low" => self.mixer.low[deck] as f64, "cfx" => self.mixer.cfx[deck] as f64, _ => return true,
+        };
+        if (val - cur).abs() < 0.02 || prev.is_some_and(|p| (p - cur) * (val - cur) <= 0.0) { self.pickup.remove(&k); return true; }
+        self.pickup.insert(k, Some(val));
+        false
+    }
 
     pub fn midi_action(&mut self, a: Action) {
         match a {
+            Action::Side { side, from, to } => self.on_side(side, from, to),
+            Action::FxLever(d) => self.fx_channel(d.unwrap_or(DECKS)),
             Action::Abs { name, deck, val } => {
                 let d = deck.max(0) as usize;
                 let v = val as f32;
+                if deck >= 0 && !self.picked_up(&name, d, val) { return; }
                 match name.as_str() {
                     "tempo" => { let p = val * 2.0 - 1.0; self.decks[d].set_pitch(p); } // top = slower, bottom = faster, like a CDJ
                     "fader" => { self.mixer.fader[d] = v; self.send_mixer(); }
@@ -636,6 +791,7 @@ impl App {
                     "xfader" => { self.mixer.xfader = v; self.send_mixer(); }
                     "headMix" => { self.mixer.head_mix = v; self.send_mixer(); }
                     "master" => { self.mixer.master = v; self.send_mixer(); }
+                    "fxDepth" => self.fx_depth(val),
                     _ => {}
                 }
             }
@@ -654,13 +810,13 @@ impl App {
         }
     }
     fn press(&mut self, name: &str, arg: &str, deck: i8, on: bool) {
-        let i = deck.max(0) as usize;
+        let i = (deck.max(0) as usize).min(DECKS - 1);
         let num = || arg.parse::<f64>().unwrap_or(0.0);
         match name {
             "play" => if on { self.toggle_play(i) },
-            "playCue" => if on { let c = self.decks[i].cue; self.decks[i].seek(c); let m = self.master(i); self.decks[i].set_playing(true, m); },
+            "playCue" => if on { let c = self.decks[i].cue; self.decks[i].seek(c); self.set_playing(i, true); },
             "cue" => if on { self.decks[i].cue_down() } else { self.decks[i].cue_up() },
-            "start" => if on { self.decks[i].set_playing(false, None); self.decks[i].seek(0.0); },
+            "start" => if on { self.set_playing(i, false); self.decks[i].seek(0.0); },
             "sync" => if on { let s = !self.decks[i].sync; self.set_sync(i, s); },
             "syncOn" => if on && !self.decks[i].sync { self.set_sync(i, true) },
             "range" => if on { self.decks[i].cycle_range() },
@@ -671,7 +827,7 @@ impl App {
             }
             "loopOut" => if on { self.decks[i].loop_out() },
             "reloop" => if on { self.decks[i].reloop_exit() },
-            "reloopStop" => if on { self.decks[i].reloop_exit(); if self.decks[i].lp.on { self.decks[i].set_playing(false, None); } },
+            "reloopStop" => if on { self.decks[i].reloop_exit(); if self.decks[i].lp.on { self.set_playing(i, false); } },
             "loopHalf" => if on { self.decks[i].loop_scale(0.5) },
             "loopDouble" => if on { self.decks[i].loop_scale(2.0) },
             "callPrev" => if on { self.decks[i].call_cue(-1) },
@@ -682,8 +838,20 @@ impl App {
             "keylock" => if on { let m = !self.decks[i].mt; self.set_mt(i, m); },
             "mode" => if on {
                 match arg { "hotcue" => self.decks[i].pad_mode = PadMode::HotCue, "beatloop" => self.decks[i].pad_mode = PadMode::BeatLoop,
-                    "beatjump" => self.decks[i].pad_mode = PadMode::BeatJump, _ => self.say(&format!("Pad mode \"{arg}\" isn't in Cratebox yet"), 3.0) }
+                    "beatjump" => self.decks[i].pad_mode = PadMode::BeatJump, "padfx" => self.decks[i].pad_mode = PadMode::PadFx,
+                    "padfx2" => self.decks[i].pad_mode = PadMode::PadFx2, _ => self.say(&format!("Pad mode \"{arg}\" isn't in Cratebox yet"), 3.0) }
             },
+            "pfx" | "pfx2" => if let Ok(p) = arg.parse::<usize>() {
+                let bank = if name == "pfx" { 0 } else { 1 };
+                if on { let c = self.clock_fn(); self.fx.pad_down(i, bank, p, &c); } else { self.fx.pad_up(i, bank, p); }
+            },
+            "masterCue" => if on { self.mixer.master_cue = !self.mixer.master_cue; self.send_mixer(); },
+            "fxSelect" => if on { self.fx_select(1) },
+            "fxSelectPrev" => if on { self.fx_select(-1) },
+            "fxBeatDown" => if on { self.fx_beat(-1) },
+            "fxBeatUp" => if on { self.fx_beat(1) },
+            "fxOn" => if on { let v = !self.fx.on; self.fx_on(v); },
+            "fxOff" => if on { self.fx_on(false) },
             "hot" => if on { self.decks[i].hotcue(num() as usize) },
             "hotClear" => if on { self.decks[i].clear_hot(num() as usize) },
             "loop" => if on { self.decks[i].beat_loop(num()) },
@@ -698,7 +866,9 @@ impl App {
     }
     pub fn set_mt(&mut self, i: usize, on: bool) {
         self.decks[i].set_mt(on);
-        self.store.settings.mt[i] = on;
+        let mt = &mut self.store.settings.mt;
+        if mt.len() < DECKS { mt.resize(DECKS, true); }
+        mt[i] = on;
         self.store.dirty_settings = true;
     }
     pub fn set_spin(&mut self, secs: f64) {
@@ -711,7 +881,11 @@ impl App {
         let blink_on = (std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis()).unwrap_or(0) % 1000) < 500;
         let decks = &self.decks;
         let pfl = self.mixer.pfl;
+        let (fx_on, pads) = (self.fx.on, self.fx.pad);
         self.midi.update_leds(|name, arg, i| {
+            if name == "fxOn" { return Some(fx_on); }
+            if i < 0 { return None; }
+            let i = (i as usize).min(DECKS - 1);
             let d = &decks[i];
             Some(match name {
                 "play" => d.playing || (d.loaded() && blink_on), // PLAY blinks when paused
@@ -723,12 +897,17 @@ impl App {
                 "reloop" => d.lp.b.is_some(),
                 "keylock" => d.mt,
                 "quant" => d.quant,
-                "mode" => match arg { "hotcue" => d.pad_mode == PadMode::HotCue, "beatloop" => d.pad_mode == PadMode::BeatLoop, "beatjump" => d.pad_mode == PadMode::BeatJump, _ => false },
+                "mode" => match arg { "hotcue" => d.pad_mode == PadMode::HotCue, "beatloop" => d.pad_mode == PadMode::BeatLoop, "beatjump" => d.pad_mode == PadMode::BeatJump,
+                    "padfx" => d.pad_mode == PadMode::PadFx, "padfx2" => d.pad_mode == PadMode::PadFx2, _ => false },
                 "hot" => d.pad_mode == PadMode::HotCue && arg.parse::<usize>().ok().and_then(|k| d.hot.get(k).copied().flatten()).is_some(),
                 "loop" => d.pad_mode == PadMode::BeatLoop && d.lp.on && (d.loop_beats() - arg.parse::<f64>().unwrap_or(-1.0)).abs() < 0.01,
+                "pfx" | "pfx2" => {
+                    let bank = if name == "pfx" { 0 } else { 1 };
+                    d.pad_mode.fx_bank() == Some(bank) && pads[i].is_some_and(|(p, b)| b == bank && Some(p) == arg.parse::<usize>().ok())
+                }
                 _ => return None,
             })
-        }, [level(self.status_snap.meters[0]), level(self.status_snap.meters[1])]);
+        }, std::array::from_fn(|k| level(self.status_snap.meters[k])));
     }
 
     // ======================= the per-frame tick =======================
@@ -736,16 +915,39 @@ impl App {
         // audio thread state
         if let Ok(s) = self.shared.lock() { self.status_snap = *s; }
         let snap = self.status_snap;
-        for i in 0..2 { self.decks[i].on_report(&snap.decks[i], snap.at); }
+        for i in 0..DECKS { self.decks[i].on_report(&snap.decks[i], snap.at); }
         while self.trash_rx.try_recv().is_ok() {} // finished-with audio buffers get freed here, not on the audio thread
         if let Some(e) = self.audio.take_error() { self.say(&format!("Sound output problem: {e}"), 8.0); }
         self.watch_output();
-        // sync follows the other deck's tempo
-        for i in 0..2 { let m = self.master(i); self.decks[i].sync_tick(m); self.decks[i].tick(); }
+        // HEAT: the worker's view, PUFF amounts into the BEAT FX unit, learned models and the device to remember
+        self.heat.poll();
+        while let Ok(e) = self.heat.events.try_recv() {
+            match e {
+                crate::heat::Event::Connected(c) => {
+                    self.fx.puff_ready = c;
+                    if !c && self.fx.fx == crate::fx::FxKind::Puff { self.fx_pick(crate::fx::FxKind::Echo); }
+                }
+                crate::heat::Event::Puff(a) => self.fx.set_puff(a),
+                crate::heat::Event::Model(id, m) => { self.store.settings.heat_models.insert(id, m); self.store.dirty_settings = true; }
+                crate::heat::Event::DeviceId(id) => { self.store.settings.heat_device = id; self.store.dirty_settings = true; }
+                crate::heat::Event::Status(s) => self.say(&s, 5.0),
+            }
+        }
+        // sync follows the master's tempo and phase; FX clocks follow the decks
+        for i in 0..DECKS { let p = self.peers(); self.decks[i].sync_tick(&p); self.decks[i].tick(); }
+        let ck = self.clock_fn();
+        self.fx.clock_tick(&ck);
+        if self.fx.dirty {
+            self.fx.dirty = false;
+            let s = &mut self.store.settings;
+            s.bfx_fx = self.fx.fx.name().into(); s.bfx_depth = self.fx.depth; s.bfx_ch = self.fx.ch; s.bfx_beats = self.fx.saved_beats();
+            self.store.dirty_settings = true;
+        }
+        if let Some(r) = self.rec.as_mut() { if let Some(e) = r.take_error() { self.say(&e, 10.0); } }
         // finished work
         while let Ok(j) = self.jobs_rx.try_recv() { self.on_job(j); }
         // deck side effects
-        for i in 0..2 {
+        for i in 0..DECKS {
             let evs: Vec<DeckEvent> = std::mem::take(&mut self.decks[i].events);
             for e in evs { self.on_deck_event(e); }
         }
@@ -785,6 +987,7 @@ impl App {
         }
     }
     pub fn flush_now(&mut self) {
+        if self.rec.is_some() { self.toggle_rec(); std::thread::sleep(Duration::from_millis(700)); }
         self.store.playlists = self.lists.lists.clone();
         self.store.dirty_playlists = true;
         let _ = self.store.flush();

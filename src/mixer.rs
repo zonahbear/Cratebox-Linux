@@ -1,26 +1,42 @@
 //! The mixer (audio thread): per channel trim, 3-band isolator EQ (Linkwitz-Riley crossovers at
-//! 250 Hz and 2.5 kHz, so each band can be killed), CFX filter, headphone cue send, meters, channel
-//! fader and crossfader; master level, limiter, cue/master headphone blend and output routing.
+//! 250 Hz and 2.5 kHz, so each band can be killed), CFX filter, the Beat FX / Pad FX insert, headphone
+//! cue send, meters, channel fader and crossfader; master level, limiter, cue/master headphone blend
+//! and output routing. Four channels; 3 and 4 only sound in 4-deck mode.
+
+use crate::fx::FxUnit;
+
+pub const DECKS: usize = 4;
 
 /// all controls normalised 0..1, like the hardware
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct MixerParams {
-    pub trim: [f32; 2],
-    pub hi: [f32; 2],
-    pub mid: [f32; 2],
-    pub low: [f32; 2],
-    pub cfx: [f32; 2],
-    pub fader: [f32; 2],
-    pub pfl: [bool; 2],
+    pub trim: [f32; DECKS],
+    pub hi: [f32; DECKS],
+    pub mid: [f32; DECKS],
+    pub low: [f32; DECKS],
+    pub cfx: [f32; DECKS],
+    pub fader: [f32; DECKS],
+    pub pfl: [bool; DECKS],
     pub xfader: f32,
     pub head_mix: f32,
+    /// MST next to CUE/MASTER: the master in the headphones at full level
+    pub master_cue: bool,
     pub master: f32,
+    /// decks shown (3 and 4 only in 4-deck mode); hidden ones are muted
+    pub active: [bool; DECKS],
 }
 
 impl Default for MixerParams {
     fn default() -> Self {
-        MixerParams { trim: [0.5; 2], hi: [0.5; 2], mid: [0.5; 2], low: [0.5; 2], cfx: [0.5; 2], fader: [0.8; 2], pfl: [false; 2], xfader: 0.5, head_mix: 0.5, master: 0.8 }
+        MixerParams { trim: [0.5; DECKS], hi: [0.5; DECKS], mid: [0.5; DECKS], low: [0.5; DECKS], cfx: [0.5; DECKS], fader: [0.8; DECKS], pfl: [false; DECKS],
+            xfader: 0.5, head_mix: 0.0, master_cue: false, master: 0.8, active: [true, true, false, false] }
     }
+}
+
+/// CUE/MASTER knob -> (cue gain, master gain): all cue up to 12 o'clock, then equal power to all master
+pub fn head_mix(v: f64) -> (f64, f64) {
+    let hm = ((v - 0.53) / 0.47).clamp(0.0, 1.0);
+    ((hm * std::f64::consts::FRAC_PI_2).cos(), (hm * std::f64::consts::FRAC_PI_2).sin())
 }
 
 pub fn db_to_gain(db: f64) -> f64 { 10f64.powf(db / 20.0) }
@@ -30,9 +46,9 @@ pub fn eq_gain(v: f64) -> f64 {
 }
 pub fn trim_gain(v: f64) -> f64 { if v < 0.5 { if v < 0.01 { 0.0 } else { db_to_gain(-24.0 + 48.0 * v) } } else { db_to_gain((v - 0.5) * 18.0) } }
 pub fn fader_gain(v: f64) -> f64 { if v < 0.005 { 0.0 } else { v.powf(1.8) } }
-/// crossfader: both full at the centre, smooth fade to each side
+/// crossfader: both full at the centre, smooth fade to each side; decks 1 and 3 on the left, 2 and 4 on the right
 pub fn xf_gain(i: usize, x: f64) -> f64 {
-    let g = if i == 0 { if x <= 0.5 { 1.0 } else { ((x - 0.5) * std::f64::consts::PI).cos() } } else if x >= 0.5 { 1.0 } else { ((0.5 - x) * std::f64::consts::PI).cos() };
+    let g = if i % 2 == 0 { if x <= 0.5 { 1.0 } else { ((x - 0.5) * std::f64::consts::PI).cos() } } else if x >= 0.5 { 1.0 } else { ((0.5 - x) * std::f64::consts::PI).cos() };
     if g < 0.002 { 0.0 } else { g }
 }
 /// CFX: the FLX4's per-channel filter knob. Left = low-pass, right = high-pass, centre = off.
@@ -56,6 +72,8 @@ impl Biquad {
         let (b0, b1, b2) = if lp { ((1.0 - c) / 2.0, 1.0 - c, (1.0 - c) / 2.0) } else { ((1.0 + c) / 2.0, -(1.0 + c), (1.0 + c) / 2.0) };
         self.b0 = b0 / a0; self.b1 = b1 / a0; self.b2 = b2 / a0; self.a1 = -2.0 * c / a0; self.a2 = (1.0 - al) / a0;
     }
+    /// same coefficients, no ringing state
+    pub fn cleared(&self) -> Biquad { Biquad { z1: [0.0; 2], z2: [0.0; 2], ..*self } }
     #[inline]
     pub fn tick(&mut self, ch: usize, x: f64) -> f64 {
         let y = self.b0 * x + self.z1[ch];
@@ -93,6 +111,10 @@ pub struct Strip {
     hi: [Biquad; 2],
     lp: Biquad,
     hp: Biquad,
+    /// Beat FX / Pad FX insert: after the EQ and CFX filter, before CUE, the meter and the fader
+    pub fx: FxUnit,
+    /// samples of silence in a row (an idle channel skips its filters)
+    silent: usize,
     /// peak level of this channel (post-EQ/filter, pre-fader), for the channel meter
     pub peak: f32,
 }
@@ -106,7 +128,7 @@ impl Strip {
             lo: [Biquad::new(true, 250.0, 0.7071, sr); 2],
             mi: [Biquad::new(false, 250.0, 0.7071, sr), Biquad::new(false, 250.0, 0.7071, sr), Biquad::new(true, 2500.0, 0.7071, sr), Biquad::new(true, 2500.0, 0.7071, sr)],
             hi: [Biquad::new(false, 2500.0, 0.7071, sr); 2],
-            lp: Biquad::new(true, 22000.0, 0.707, sr), hp: Biquad::new(false, 10.0, 0.707, sr), peak: 0.0,
+            lp: Biquad::new(true, 22000.0, 0.707, sr), hp: Biquad::new(false, 10.0, 0.707, sr), fx: FxUnit::new(sr), silent: 0, peak: 0.0,
         }
     }
     pub fn set(&mut self, p: &MixerParams, i: usize) {
@@ -116,14 +138,29 @@ impl Strip {
         self.lo_g.target = eq_gain(p.low[i] as f64);
         self.fader.target = fader_gain(p.fader[i] as f64);
         self.pfl.target = if p.pfl[i] { 1.0 } else { 0.0 };
-        self.xf.target = xf_gain(i, p.xfader as f64);
+        self.xf.target = if p.active[i] { xf_gain(i, p.xfader as f64) } else { 0.0 };
         let (lf, lq, hf, hq) = cfx_params(p.cfx[i] as f64);
         self.lp_f.target = lf; self.lp_q.target = lq; self.hp_f.target = hf; self.hp_q.target = hq;
     }
-    /// process a block: in (l, r) -> adds to master (ml, mr) and cue bus (cl, cr)
-    pub fn process(&mut self, l: &[f32], r: &[f32], ml: &mut [f32], mr: &mut [f32], cl: &mut [f32], cr: &mut [f32]) {
+    /// process a block: in (l, r) -> adds to master (ml, mr) and cue bus (cl, cr). `l`/`r` are used as
+    /// scratch (the FX insert works in place). `time` is the audio clock at the block's start.
+    pub fn process(&mut self, l: &mut [f32], r: &mut [f32], ml: &mut [f32], mr: &mut [f32], cl: &mut [f32], cr: &mut [f32], time: f64) {
         let n = l.len();
-        let mut peak = 0f32;
+        // a stopped deck feeds silence: once the filters have rung out (half a second), skip the work.
+        // The FX history keeps its timeline (rolls line up), and a ringing echo keeps the channel awake.
+        if !self.fx.active() && l.iter().chain(r.iter()).all(|v| *v == 0.0) {
+            self.silent += n;
+            if self.silent as f64 > 0.5 * self.sr {
+                self.lo = [self.lo[0].cleared(), self.lo[1].cleared()];
+                for f in self.mi.iter_mut() { *f = f.cleared(); }
+                self.hi = [self.hi[0].cleared(), self.hi[1].cleared()];
+                self.lp = self.lp.cleared(); self.hp = self.hp.cleared();
+                for s in [&mut self.trim, &mut self.lo_g, &mut self.mid_g, &mut self.hi_g, &mut self.fader, &mut self.xf, &mut self.pfl] { s.v = s.target; }
+                self.fx.idle(n);
+                self.peak = 0.0;
+                return;
+            }
+        } else { self.silent = 0; }
         let mut i = 0;
         while i < n {
             // filter frequencies glide in 32-sample steps
@@ -135,8 +172,7 @@ impl Strip {
                 self.hp.set(false, self.hp_f.v, self.hp_q.v, sr);
             }
             for k in i..e {
-                let (tg, lg, mg, hg, fg, xg, pg) = (self.trim.next(), self.lo_g.next(), self.mid_g.next(), self.hi_g.next(), self.fader.next(), self.xf.next(), self.pfl.next());
-                let mut out = [0f64; 2];
+                let (tg, lg, mg, hg) = (self.trim.next(), self.lo_g.next(), self.mid_g.next(), self.hi_g.next());
                 for ch in 0..2 {
                     let x = if ch == 0 { l[k] } else { r[k] } as f64 * tg;
                     let lo = self.lo[0].tick(ch, x);
@@ -147,15 +183,22 @@ impl Strip {
                     let hi = self.hi[1].tick(ch, hi);
                     let s = lo * lg + mi * mg + hi * hg;
                     let s = self.lp.tick(ch, s);
-                    out[ch] = self.hp.tick(ch, s);
+                    let y = self.hp.tick(ch, s) as f32;
+                    if ch == 0 { l[k] = y } else { r[k] = y }
                 }
-                let a = out[0].abs().max(out[1].abs()) as f32;
-                if a > peak { peak = a; }
-                let g = fg * xg;
-                ml[k] += (out[0] * g) as f32; mr[k] += (out[1] * g) as f32;
-                cl[k] += (out[0] * pg) as f32; cr[k] += (out[1] * pg) as f32;
             }
             i = e;
+        }
+        self.fx.process(l, r, time);
+        let mut peak = 0f32;
+        for k in 0..n {
+            let (fg, xg, pg) = (self.fader.next(), self.xf.next(), self.pfl.next());
+            let (a, b) = (l[k] as f64, r[k] as f64);
+            let pk = l[k].abs().max(r[k].abs());
+            if pk > peak { peak = pk; }
+            let g = fg * xg;
+            ml[k] += (a * g) as f32; mr[k] += (b * g) as f32;
+            cl[k] += (a * pg) as f32; cr[k] += (b * pg) as f32;
         }
         self.peak = peak;
     }
@@ -195,6 +238,9 @@ mod tests {
         assert!((eq_gain(1.0) - db_to_gain(6.0)).abs() < 1e-9);
         assert!((xf_gain(0, 0.5) - 1.0).abs() < 1e-12 && xf_gain(1, 0.0) == 0.0 && xf_gain(0, 1.0) == 0.0);
         assert_eq!(fader_gain(0.0), 0.0);
+        assert!(xf_gain(2, 1.0) == 0.0 && xf_gain(3, 0.0) == 0.0, "3 left, 4 right");
+        assert_eq!(head_mix(0.0), (1.0, 0.0));
+        assert!(head_mix(1.0).0.abs() < 1e-12 && (head_mix(1.0).1 - 1.0).abs() < 1e-12);
     }
     #[test]
     fn eq_bands_sum_flat_and_kill_works() {
@@ -206,17 +252,18 @@ mod tests {
             for _ in 0..3 { s.fader.next(); }
             let x = tone(f);
             let n = x.len();
+            let (mut xl, mut xr) = (x.clone(), x.clone());
             let (mut ml, mut mr, mut cl, mut cr) = (vec![0f32; n], vec![0f32; n], vec![0f32; n], vec![0f32; n]);
-            s.process(&x, &x, &mut ml, &mut mr, &mut cl, &mut cr);
+            s.process(&mut xl, &mut xr, &mut ml, &mut mr, &mut cl, &mut cr, 0.0);
             ml[24000..].iter().fold(0f32, |m, v| m.max(v.abs()))
         };
-        let mut p = MixerParams { fader: [1.0; 2], ..Default::default() };
+        let mut p = MixerParams { fader: [1.0; DECKS], ..Default::default() };
         for f in [60.0, 800.0, 6000.0] { let l = level(&p, f); assert!((l - 0.5).abs() < 0.06, "flat at {f}: {l}"); }
-        p.low = [0.0; 2];
+        p.low = [0.0; DECKS];
         assert!(level(&p, 60.0) < 0.02, "low kill");
         assert!(level(&p, 6000.0) > 0.45, "highs untouched by low kill");
-        p.low = [0.5; 2];
-        p.cfx = [0.1; 2];
+        p.low = [0.5; DECKS];
+        p.cfx = [0.1; DECKS];
         assert!(level(&p, 6000.0) < 0.05, "CFX left = low-pass");
     }
 }

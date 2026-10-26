@@ -16,8 +16,31 @@ pub struct Settings {
     pub bpm_range: usize,
     pub wave_style: String,
     pub spin: f64,
-    pub mt: [bool; 2],
+    /// master tempo per deck (a list, so older two-deck settings files still load)
+    pub mt: Vec<bool>,
+    /// 4-deck mode
+    pub four: bool,
+    /// WAVE mode: just the waveforms (and the library)
+    pub wave: bool,
+    /// the BEAT FX unit: effect, LEVEL/DEPTH, channel (0-3, 4 = master) and the BEAT picked for each effect
+    pub bfx_fx: String,
+    pub bfx_depth: f64,
+    pub bfx_ch: usize,
+    pub bfx_beats: HashMap<String, f64>,
+    /// where REC saves (empty: ~/Music/Cratebox Recordings)
+    pub rec_dir: String,
+    /// HEAT: curves pasted from TrueCurve, the curve picked last, HOLD temperature, PUFF full-warble dip
+    /// (0 = Auto), the Puffco used last (its Bluetooth address) and each device's learned heater model
+    pub heat_curves: HashMap<String, crate::heat::CurveDef>,
+    pub heat_last: String,
+    pub heat_hold_f: f64,
+    pub heat_puff_full: f64,
+    pub heat_device: String,
+    pub heat_models: HashMap<String, crate::heat::HeaterModel>,
     pub zoom: f64,
+    /// the library's height and its playlist column's width when dragged (0 = automatic)
+    pub lib_h: f32,
+    pub tree_w: f32,
     pub browse: bool,
     pub out_device: String,
     /// "auto" (4-channel device -> quad, else master only), "quad", "split", "device", "off"
@@ -37,7 +60,9 @@ pub struct Settings {
 impl Default for Settings {
     fn default() -> Self {
         Settings {
-            folders: vec![], devices: vec![], bpm_range: 3, wave_style: "rgb".into(), spin: 2.5, mt: [true, true], zoom: 8.0, browse: false,
+            folders: vec![], devices: vec![], bpm_range: 3, wave_style: "rgb".into(), spin: 2.5, mt: vec![true; 4], four: false, wave: false,
+            bfx_fx: "ECHO".into(), bfx_depth: 0.55, bfx_ch: 0, bfx_beats: HashMap::new(), rec_dir: String::new(),
+            heat_curves: HashMap::new(), heat_last: crate::heat::DEFAULT_NAME.into(), heat_hold_f: 500.0, heat_puff_full: 0.0, heat_device: String::new(), heat_models: HashMap::new(), zoom: 8.0, lib_h: 0.0, tree_w: 0.0, browse: false,
             out_device: String::new(), hp_mode: "auto".into(), hp_device: String::new(), midi_in: String::new(), profile_for: HashMap::new(),
             learned: HashMap::new(), base_path: String::new(), pl_open: vec![], bad: vec![], buffer: 256,
         }

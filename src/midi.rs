@@ -1,7 +1,8 @@
-//! Controllers: Pioneer DJ / AlphaTheta profiles, a table-driven MIDI engine, LEDs and MIDI learn.
-//! A mapping entry is (status, data1, action, deck, lsb): status/data1 of the message (note-offs are
-//! treated as their note-on), the Cratebox action, the deck (0/1, -1 = global) and, for 14-bit
-//! controls, the data1 of the LSB message (0 if none).
+//! Controllers: Pioneer DJ / AlphaTheta profiles, a table-driven MIDI engine, LEDs, deck layers and MIDI
+//! learn. A mapping entry is (status, data1, action, deck, lsb): status/data1 of the message (note-offs
+//! are treated as their note-on), the Cratebox action, the deck (0/1 = the controller's left/right side,
+//! -1 = global) and, for 14-bit controls, the data1 of the LSB message (0 if none). In 4-deck mode each
+//! side plays deck 1 or 3 (left) and 2 or 4 (right): the layer buttons switch them.
 
 use crate::deck::{JUMPS, LOOP_SIZES};
 use crate::maps::mixxx_map;
@@ -29,7 +30,8 @@ pub const FLX4_KEEPALIVE: &[u8] = &[0xf0, 0x00, 0x40, 0x05, 0x00, 0x00, 0x04, 0x
 pub fn profiles() -> Vec<Profile> {
     let p = |id, name, src, vu, leds| Profile { id, name, src, keep_alive: None, init: None, vu, leds };
     let mut v = vec![
-        Profile { keep_alive: Some(FLX4_KEEPALIVE), ..p("ddj-flx4", "Pioneer DDJ-FLX4", Src::Tested, true, true) },
+        // FLX4: the keep-alive doubles as "send me every control's position" (Mixxx's DDJ-FLX4 script), so it goes at connect too
+        Profile { keep_alive: Some(FLX4_KEEPALIVE), init: Some(FLX4_KEEPALIVE), ..p("ddj-flx4", "Pioneer DDJ-FLX4", Src::Tested, true, true) },
         Profile { init: Some(&[0xf0, 0x00, 0x40, 0x05, 0x00, 0x00, 0x02, 0x06, 0x00, 0x03, 0x01, 0xf7]), ..p("ddj-400", "Pioneer DDJ-400", Src::Mixxx, true, true) },
         Profile { init: Some(&[0xf0, 0x00, 0x40, 0x05, 0x00, 0x00, 0x02, 0x0a, 0x00, 0x03, 0x01, 0xf7]), ..p("ddj-200", "Pioneer DDJ-200", Src::Mixxx, false, true) },
         Profile { init: Some(&[0xf0, 0x00, 0x20, 0x7f, 0x03, 0x01, 0xf7]), ..p("ddj-sb3", "Pioneer DDJ-SB3", Src::Mixxx, false, true) },
@@ -132,11 +134,17 @@ pub fn ddj_rekordbox_map(deck_chs: &[u8], pad_chs: &[(u8, u8)]) -> Vec<Entry> {
             m.push(e(pn, 0x60 + p, &format!("loop:{ls}"), d, 0));
             m.push(e(ps, 0x60 + p, &format!("loop:{ls}"), d, 0));
             m.push(e(pn, 0x20 + p, &format!("jump:{}", fmt_num(JUMPS[p as usize])), d, 0));
+            m.push(e(pn, 0x10 + p, &format!("pfx:{p}"), d, 0)); m.push(e(ps, 0x10 + p, &format!("pfx:{p}"), d, 0));
+            m.push(e(pn, 0x50 + p, &format!("pfx2:{p}"), d, 0)); m.push(e(ps, 0x50 + p, &format!("pfx2:{p}"), d, 0));
         }
     }
     for x in [(0x96, 0x46, "load", 0, 0), (0x96, 0x47, "load", 1, 0), (0x96, 0x48, "load", 0, 0), (0x96, 0x49, "load", 1, 0),
               (0x96, 0x41, "browsePress", -1, 0), (0x96, 0x42, "browseShift", -1, 0), (0xb6, 0x40, "browse", -1, 0), (0xb6, 0x64, "zoom", -1, 0),
-              (0xb6, 0x1f, "xfader", -1, 0x3f), (0xb6, 0x17, "cfx", 0, 0x37), (0xb6, 0x18, "cfx", 1, 0x38), (0xb6, 0x0c, "headMix", -1, 0x2c)] {
+              (0xb6, 0x1f, "xfader", -1, 0x3f), (0xb6, 0x17, "cfx", 0, 0x37), (0xb6, 0x18, "cfx", 1, 0x38), (0xb6, 0x0c, "headMix", -1, 0x2c),
+              // BEAT FX: select (SHIFT = back), beat ◀ ▶, the CH SELECT lever, ON/OFF, LEVEL/DEPTH
+              (0x94, 0x63, "fxSelect", -1, 0), (0x94, 0x64, "fxSelectPrev", -1, 0), (0x94, 0x4a, "fxBeatDown", -1, 0), (0x94, 0x4b, "fxBeatUp", -1, 0),
+              (0x94, 0x10, "fxCh:0", -1, 0), (0x95, 0x11, "fxCh:1", -1, 0), (0x94, 0x47, "fxOn", -1, 0), (0x95, 0x47, "fxOn", -1, 0),
+              (0x94, 0x43, "fxOff", -1, 0), (0x95, 0x43, "fxOff", -1, 0), (0xb4, 0x02, "fxDepth", -1, 0x22)] {
         m.push(e(x.0, x.1, x.2, x.3, x.4));
     }
     for st in [0x94u8, 0x95] { for no in 0..128u8 { m.push(e(st, no, "unsupported:Beat FX", -1, 0)); } }
@@ -180,10 +188,12 @@ pub fn midi_key(st: u8, d1: u8) -> u16 {
 pub fn rel_ticks(v: u8) -> f64 { v as f64 - 64.0 } // jog wheels: centre 64, <64 backwards
 pub fn rel_knob(v: u8) -> i32 { if v < 64 { v as i32 } else { v as i32 - 128 } } // browse: 1 = clockwise, 127 = anticlockwise
 
-pub const ABS_ACTIONS: [&str; 10] = ["tempo", "fader", "trim", "hi", "mid", "low", "cfx", "xfader", "headMix", "master"];
+pub const ABS_ACTIONS: [&str; 11] = ["tempo", "fader", "trim", "hi", "mid", "low", "cfx", "xfader", "headMix", "master", "fxDepth"];
+/// per-deck controls that wait for the hardware to reach the deck's setting after a layer switch (soft takeover)
+pub const PICKUP: [&str; 7] = ["tempo", "fader", "trim", "hi", "mid", "low", "cfx"];
 pub const REL_ACTIONS: [&str; 5] = ["jogTop", "jogSide", "jogSearch", "browse", "zoom"];
 pub fn is_led_action(a: &str) -> bool {
-    ["play", "cue", "sync", "pfl", "loopIn", "loopOut", "reloop", "keylock", "quant", "mode:", "hot:", "loop:"].iter().any(|p| a.starts_with(p))
+    ["play", "cue", "sync", "pfl", "loopIn", "loopOut", "reloop", "keylock", "quant", "mode:", "hot:", "loop:", "pfx:", "pfx2:", "fxOn", "layer"].iter().any(|p| a.starts_with(p))
 }
 
 /// what a MIDI message asks for
@@ -195,6 +205,10 @@ pub enum Action {
     Rel { name: String, deck: i8, ticks: f64 },
     /// a button
     Press { name: String, arg: String, deck: i8, on: bool },
+    /// a layer button moved a side of the controller (0 = left, 1 = right) from deck `from` to deck `to`
+    Side { side: usize, from: usize, to: usize },
+    /// the FLX4's BEAT FX CH SELECT lever: a deck, or None = MASTER
+    FxLever(Option<usize>),
 }
 
 #[derive(Clone, Debug)]
@@ -217,13 +231,21 @@ pub struct Engine {
     pub hint: Option<String>,
     /// learned mappings changed (the app saves them)
     pub learned_changed: bool,
+    /// which deck each side of the controller plays (deck layers, 4-deck mode)
+    pub side: [usize; 2],
+    /// set by the app: 4-deck mode (layers only switch then)
+    pub four: bool,
+    fx_lever: [bool; 2],
+    /// setting up the layer buttons: which side's button comes next
+    pub capture: Option<usize>,
 }
 
 impl Default for Engine { fn default() -> Self { Engine::new() } }
 
 impl Engine {
     pub fn new() -> Engine {
-        Engine { profile: "learn", table: HashMap::new(), lsb_table: HashMap::new(), msb: HashMap::new(), led_cache: HashMap::new(), led_entries: vec![], learned: vec![], learning: None, out: vec![], log: vec![], hint: None, learned_changed: false }
+        Engine { profile: "learn", table: HashMap::new(), lsb_table: HashMap::new(), msb: HashMap::new(), led_cache: HashMap::new(), led_entries: vec![], learned: vec![], learning: None, out: vec![], log: vec![], hint: None, learned_changed: false,
+            side: [0, 1], four: false, fx_lever: [false; 2], capture: None }
     }
     pub fn use_profile(&mut self, id: &str, learned: Vec<Entry>) {
         let ps = profiles();
@@ -264,14 +286,19 @@ impl Engine {
         let (st, d1, d2) = (data[0], data[1], *data.get(2).unwrap_or(&0));
         let ty = st & 0xf0;
         if ty != 0x90 && ty != 0x80 && ty != 0xb0 { return None; }
+        if self.capture.is_some() && ty == 0x90 && d2 > 0 { self.capture_layer(st, d1); return None; }
         if self.learning.is_some() { self.learn_capture(st, d1, d2); return None; }
         let k = midi_key(st, d1);
         if let Some(e) = self.table.get(&k).cloned() { return self.run(&e, ty, d2, false); }
         if let Some(l) = self.lsb_table.get(&k).cloned() { if ty == 0xb0 { return self.run(&l, ty, d2, true); } }
         None
     }
+    /// the deck a side's control drives now
+    pub fn hw_deck(&self, d: i8) -> i8 { if self.four && (d == 0 || d == 1) { self.side[d as usize] as i8 } else { d } }
     fn run(&mut self, e: &Entry, ty: u8, v: u8, is_lsb: bool) -> Option<Action> {
         let (name, arg) = match e.2.find(':') { Some(i) => (&e.2[..i], &e.2[i + 1..]), None => (e.2.as_str(), "") };
+        let deck = if name == "layer" { e.3 } else { self.hw_deck(e.3) };
+        let e = &Entry(e.0, e.1, e.2.clone(), deck, e.4);
         if ty == 0xb0 && ABS_ACTIONS.contains(&name) {
             let k = midi_key(e.0, e.1);
             let val = if e.4 == 0 { v as f64 / 127.0 }
@@ -285,17 +312,77 @@ impl Engine {
             return Some(Action::Rel { name: name.into(), deck: e.3, ticks });
         }
         let on = if ty == 0x90 { v > 0 } else if ty == 0x80 { false } else { v > 63 };
-        Some(Action::Press { name: name.into(), arg: arg.into(), deck: e.3, on })
+        match name {
+            "layer" => { if on && self.four && (0..2).contains(&e.3) { return self.toggle_side(e.3 as usize); } None }
+            // CH1 / CH2 send 7F while the lever is there, 00 when it leaves; neither = MASTER
+            "fxCh" => {
+                let k = arg.parse::<usize>().unwrap_or(0).min(1);
+                self.fx_lever[k] = on;
+                Some(Action::FxLever(if self.fx_lever[0] { Some(self.side_deck(0)) } else if self.fx_lever[1] { Some(self.side_deck(1)) } else { None }))
+            }
+            _ => Some(Action::Press { name: name.into(), arg: arg.into(), deck: e.3, on }),
+        }
+    }
+    fn side_deck(&self, s: usize) -> usize { if self.four { self.side[s] } else { s } }
+    /// switch a side between its two decks (1 ⇄ 3 on the left, 2 ⇄ 4 on the right)
+    pub fn toggle_side(&mut self, s: usize) -> Option<Action> { let to = if self.side[s] == s { s + 2 } else { s }; self.set_side(s, to) }
+    pub fn set_side(&mut self, s: usize, to: usize) -> Option<Action> {
+        if to == self.side[s] || (!self.four && to >= 2) { return None; }
+        let from = self.side[s];
+        self.side[s] = to;
+        Some(Action::Side { side: s, from, to })
+    }
+    /// the lever's deck again (after a layer switch)
+    pub fn lever_deck(&self) -> Option<Option<usize>> {
+        if self.fx_lever[0] { Some(Some(self.side_deck(0))) } else if self.fx_lever[1] { Some(Some(self.side_deck(1))) } else { None }
     }
 
-    /// LEDs: `state(action name, arg, deck)` says whether that light should be on
-    pub fn update_leds(&mut self, mut state: impl FnMut(&str, &str, usize) -> Option<bool>, vu: [f32; 2]) {
+    /// LEDs: `state(action name, arg, deck)` says whether that light should be on (deck -1 = global);
+    /// `vu` is each deck's meter level 0..1
+    pub fn update_leds(&mut self, mut state: impl FnMut(&str, &str, i8) -> Option<bool>, vu: [f32; 4]) {
         for e in self.led_entries.clone() {
+            // a layer button's light stays off: on the FLX4, SMART CFX's and SMART FADER's lights switch the
+            // controller's own Smart CFX / Smart Fader on, which then moves the EQ and BEAT FX by itself
+            if e.2 == "layer" { self.led(e.0, e.1, 0); continue; }
+            if e.2 == "fxOn" { if let Some(on) = state("fxOn", "", -1) { self.led(e.0, e.1, if on { 0x7f } else { 0 }); } continue; }
             if e.3 < 0 { continue; }
             let (name, arg) = match e.2.find(':') { Some(i) => (&e.2[..i], &e.2[i + 1..]), None => (e.2.as_str(), "") };
-            if let Some(on) = state(name, arg, e.3 as usize) { self.led(e.0, e.1, if on { 0x7f } else { 0 }); }
+            let d = self.hw_deck(e.3);
+            if let Some(on) = state(name, arg, d) { self.led(e.0, e.1, if on { 0x7f } else { 0 }); }
         }
-        if self.profile_info().vu { for i in 0..2 { self.led(0xb0 + i as u8, 0x02, (vu[i] * 127.0).round().clamp(0.0, 127.0) as u8); } }
+        if self.profile_info().vu { for i in 0..2 { let d = self.side_deck(i); self.led(0xb0 + i as u8, 0x02, (vu[d] * 127.0).round().clamp(0.0, 127.0) as u8); } }
+    }
+
+    /// SMART CFX / SMART FADER (or two spare buttons) as layer buttons: press each once
+    pub fn setup_layer_buttons(&mut self) {
+        self.capture = Some(0);
+        self.hint = Some(self.layer_ask(""));
+    }
+    fn layer_ask(&self, pre: &str) -> String {
+        let flx = self.profile.contains("flx");
+        let k = self.capture.unwrap_or(0);
+        let what = match (k, flx) { (0, true) => "SMART CFX", (1, true) => "SMART FADER", (0, false) => "a spare button for the left side", _ => "a spare button for the right side" };
+        format!("{pre}Press {what} on the controller: it will switch the {} side between decks {}.", if k == 1 { "right" } else { "left" }, if k == 1 { "2 and 4" } else { "1 and 3" })
+    }
+    fn capture_layer(&mut self, st: u8, d1: u8) {
+        let Some(k) = self.capture else { return };
+        if let Some(have) = self.table.get(&midi_key(st, d1)) {
+            if have.2 != "layer" && !have.2.starts_with("unsupported") && have.2 != "ignore" {
+                self.hint = Some(self.layer_ask(&format!("That button already does \"{}\". ", learn_label(&have.2))));
+                return;
+            }
+        }
+        let s = if st & 0xf0 == 0x80 { 0x90 | (st & 0x0f) } else { st };
+        self.learned.retain(|e| !(midi_key(e.0, e.1) == midi_key(s, d1)) && !(e.2 == "layer" && e.3 == k as i8));
+        self.learned.push(Entry(s, d1, "layer".into(), k as i8, 0));
+        let (p, l) = (self.profile, self.learned.clone());
+        self.use_profile(p, l);
+        self.learned_changed = true;
+        if k == 0 { self.capture = Some(1); self.hint = Some(self.layer_ask("")); return; }
+        self.capture = None;
+        let flx = self.profile.contains("flx");
+        self.hint = Some(if flx { "Done: SMART CFX switches the left side 1 ⇄ 3, SMART FADER the right side 2 ⇄ 4 (in 4-deck mode).".into() }
+            else { "Done: those two buttons switch the left side 1 ⇄ 3 and the right side 2 ⇄ 4 (in 4-deck mode).".into() });
     }
 
     // ---- MIDI learn: pick a control on screen, then move or press it on the controller ----
@@ -357,6 +444,8 @@ pub fn learn_label(a: &str) -> String {
         "tempo" => "Tempo fader", "jog" => "Jog wheel", "pfl" => "Headphone cue", "fader" => "Channel fader", "trim" => "Trim", "hi" => "EQ high",
         "mid" => "EQ mid", "low" => "EQ low", "cfx" => "Filter (CFX)", "xfader" => "Crossfader", "headMix" => "Cue/master mix", "master" => "Master level",
         "browse" => "Browse knob", "browsePress" => "Browse knob press", "load" => "Load", "keylock" => "Master tempo", "quant" => "Quantize", "jogSide" => "Jog side (nudge)",
+        "masterCue" => "Master cue", "fxOn" => "Beat FX on/off", "fxSelect" => "Beat FX select", "fxBeatDown" => "Beat FX beat ◀", "fxBeatUp" => "Beat FX beat ▶",
+        "fxDepth" => "Beat FX level/depth", "layer" => "Deck layer (1⇄3 / 2⇄4)",
         _ => "",
     };
     if !l.is_empty() { return l.into(); }
@@ -397,6 +486,26 @@ mod tests {
         assert_eq!(e.input(&[0x99, 0x64, 0x7f]), Some(Action::Press { name: "loop".into(), arg: "4".into(), deck: 1, on: true }));
         assert_eq!(e.input(&[0x96, 0x47, 0x7f]), Some(Action::Press { name: "load".into(), arg: "".into(), deck: 1, on: true }));
         assert!(!e.led_entries.is_empty());
+        assert_eq!(e.input(&[0x94, 0x47, 0x7f]), Some(Action::Press { name: "fxOn".into(), arg: "".into(), deck: -1, on: true }));
+        assert_eq!(e.input(&[0x97, 0x12, 0x7f]), Some(Action::Press { name: "pfx".into(), arg: "2".into(), deck: 0, on: true }));
+        assert_eq!(e.input(&[0x94, 0x10, 0x7f]), Some(Action::FxLever(Some(0))));
+        assert_eq!(e.input(&[0x94, 0x10, 0x00]), Some(Action::FxLever(None)));
+    }
+    #[test]
+    fn layers_move_a_side_to_decks_3_and_4() {
+        let mut e = Engine::new();
+        e.use_profile("ddj-flx4", vec![]);
+        e.setup_layer_buttons();
+        e.input(&[0x96, 0x01, 0x7f]); // SMART CFX (as the FLX4 sends it: any unused note will do here)
+        e.input(&[0x96, 0x02, 0x7f]);
+        assert!(e.capture.is_none() && e.learned.iter().filter(|x| x.2 == "layer").count() == 2);
+        // two-deck mode: a layer press does nothing
+        assert_eq!(e.input(&[0x96, 0x01, 0x7f]), None);
+        e.four = true;
+        assert_eq!(e.input(&[0x96, 0x01, 0x7f]), Some(Action::Side { side: 0, from: 0, to: 2 }));
+        assert_eq!(e.input(&[0x90, 0x0b, 0x7f]), Some(Action::Press { name: "play".into(), arg: "".into(), deck: 2, on: true }));
+        assert_eq!(e.input(&[0x91, 0x0b, 0x7f]), Some(Action::Press { name: "play".into(), arg: "".into(), deck: 1, on: true }));
+        assert_eq!(e.input(&[0x96, 0x01, 0x7f]), Some(Action::Side { side: 0, from: 2, to: 0 }));
     }
     #[test]
     fn every_profile_maps_play_and_a_fader() {

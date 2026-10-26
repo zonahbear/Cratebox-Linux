@@ -40,6 +40,21 @@ impl Producer {
 }
 
 impl Consumer {
+    /// take everything waiting, in order (for the recorder: no start-up wait, no skipping)
+    pub fn drain(&mut self, mut f: impl FnMut(f32, f32)) -> usize {
+        let i = &self.0;
+        let h = i.head.load(Ordering::Acquire);
+        let mut t = i.tail.load(Ordering::Relaxed);
+        let mut n = 0;
+        while h.wrapping_sub(t) >= 2 {
+            let (l, r) = unsafe { (*i.buf[t & (i.cap - 1)].get(), *i.buf[(t + 1) & (i.cap - 1)].get()) };
+            f(l, r);
+            t = t.wrapping_add(2);
+            n += 1;
+        }
+        i.tail.store(t, Ordering::Release);
+        n
+    }
     /// fill interleaved stereo; waits for a little audio to build up before starting
     pub fn pull(&mut self, out: &mut [f32], channels: usize) {
         let i = &self.0;

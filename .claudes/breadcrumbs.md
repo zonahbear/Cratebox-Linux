@@ -42,3 +42,18 @@
   cpal thread after `systemctl --user restart pipewire ...`; new one reopened (new FIFO-70 thread,
   alsa_playback.cb-new node registered with the new PipeWire).
 - 4 decks / wave mode / HEAT / FX / XDJ-like layout went to a separate thread.
+
+## 2026-10-26 night: iOS performance-mode features + XDJ-style screen (branch claude/project-thread-a7yqwi)
+
+- Jonah: 4 decks, WAVE ("just the waveforms showing"), HEAT, FX, XDJ-like screen, smaller buttons, sized for the
+  MacBook10,1 (2304×1440 = 1152×720 pt at 2x).
+- Done: engine/mixer 4 channels + FX inserts + master FX + MST cue + REC tap; iOS sync port (master pick,
+  half/double, phase lock); deck layers + soft takeover; BEAT FX/PAD FX (fx.rs, beatfx.rs); recorder.rs;
+  heat.rs (TrueCurve + HOLD/PUFF, simulator, BlueZ via zbus); new ui.rs layout. All tests pass (lib 44,
+  app, analysis, four, ui under Xvfb). Screenshots taken at 1152×720 in Xvfb.
+- Next: try on the MacBook with the FLX4 (layer buttons, FX, CPU load with 4 decks), and HEAT with the real
+  Proxy over BlueZ (pairing without a desktop agent in the kiosk session is the risky bit).
+- Same night, Jonah's feedback ("atrocious"): mixer now one column per channel (EQs top-down), 2-deck players
+  are the iOS deck (jog + cluster, tall/compact variants in ui.rs), library height + playlist column drag
+  (settings lib_h/tree_w), keyboard+trackpad (faders grab-and-slide, scroll nudges, docs/keyboard.md),
+  FLX4 sends the Mixxx position query (= keep-alive) at connect.
