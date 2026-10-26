@@ -97,13 +97,16 @@ systemctl enable bluetooth.service
 
 # Faster boot: nothing waits for the network before the session starts, and GRUB never stops on
 # its menu (Esc at power-on still shows it), not even the 30 s it waits after an unclean shutdown
-systemctl disable NetworkManager-wait-online.service systemd-networkd-wait-online.service 2>/dev/null || true
+# masked, not just disabled: the installer copies the layers on top of each other, so a removed wants
+# link from the layer below would come back
+systemctl mask NetworkManager-wait-online.service systemd-networkd-wait-online.service 2>/dev/null || true
 
 # Nothing in the background mid-set: no automatic apt runs (the kernel is held anyway; update by
 # hand), no printer or modem daemons, no crash reporters (proposed)
 for u in apt-daily.timer apt-daily-upgrade.timer cups.service cups-browsed.service ModemManager.service \
          kerneloops.service whoopsie.service apport.service; do
     systemctl disable "$u" 2>/dev/null || true    # some exist only as stubs (kerneloops on the runner)
+    systemctl mask "$u" 2>/dev/null || true       # see wait-online above
 done
 
 # "Minimal installation" (cratebox-minimal-install): the stock full-minus-minimal packages, without
