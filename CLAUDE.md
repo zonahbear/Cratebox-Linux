@@ -45,6 +45,7 @@ src/uitest.rs      scripted UI driver: CRATEBOX_UITEST=script.json, output to CR
 tests/analysis.rs  analysis accuracy on synthetic tracks
 tests/app.rs       whole app end-to-end with FLX4 MIDI messages, persistence
 tests/ui.rs        real window under Xvfb (skipped without xvfb-run)
+docs/keyboard.md   keyboard + trackpad shortcuts (same list as ui.rs SHORTCUTS, the F12 window)
 tests/four.rs      4 decks end-to-end: channel 3, sync, layer buttons, FX, REC, HEAT simulator → PUFF
 tests/make_tracks.py   synthetic test tracks → tests/music (same script as the web repo)
 tests/fixtures/    rekordbox USB export (pyrekordbox test data, MIT)

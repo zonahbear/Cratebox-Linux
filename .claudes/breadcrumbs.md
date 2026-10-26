@@ -53,3 +53,7 @@
   app, analysis, four, ui under Xvfb). Screenshots taken at 1152×720 in Xvfb.
 - Next: try on the MacBook with the FLX4 (layer buttons, FX, CPU load with 4 decks), and HEAT with the real
   Proxy over BlueZ (pairing without a desktop agent in the kiosk session is the risky bit).
+- Same night, Jonah's feedback ("atrocious"): mixer now one column per channel (EQs top-down), 2-deck players
+  are the iOS deck (jog + cluster, tall/compact variants in ui.rs), library height + playlist column drag
+  (settings lib_h/tree_w), keyboard+trackpad (faders grab-and-slide, scroll nudges, docs/keyboard.md),
+  FLX4 sends the Mixxx position query (= keep-alive) at connect.

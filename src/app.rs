@@ -581,6 +581,8 @@ impl App {
     pub fn pick_profile(&mut self, id: &str) {
         self.use_profile(id);
         if !self.midi_io.name.is_empty() { self.store.settings.profile_for.insert(self.midi_io.name.clone(), id.to_string()); self.store.dirty_settings = true; }
+        // ask the controller where its knobs and faders are (FLX4, DDJ-400/200, SB3)
+        if let Some(init) = self.midi.profile_info().init { self.midi_io.send(init); }
     }
     pub fn pick_midi_in(&mut self, name: &str) {
         self.store.settings.midi_in = name.to_string();

@@ -39,6 +39,9 @@ pub struct Gui {
     /// HEAT panel: the paste box, and the simulator's "hold to hit" being held
     heat_paste: String,
     hitting: bool,
+    /// Ctrl+F: focus the search box next frame; F12: the shortcuts window
+    focus_search: bool,
+    keys_open: bool,
 }
 
 const ROW: f32 = 22.0;
@@ -63,7 +66,7 @@ impl Gui {
         app.repaint = Some(wake.clone());
         app.midi_io.set_wake(wake);
         Gui { app, deck_rects: [Rect::NOTHING; DECKS], jog_last: [None; DECKS], lane_drag: [None; DECKS], pad_held: None, frames: 0, test_shot: None,
-            rects: Default::default(), uitest: crate::uitest::UiTest::from_env(), heat_open: false, heat_paste: String::new(), hitting: false }
+            rects: Default::default(), uitest: crate::uitest::UiTest::from_env(), heat_open: false, heat_paste: String::new(), hitting: false, focus_search: false, keys_open: false }
     }
 
     /// in learn mode a click on a mappable control picks it; returns true if it was used up that way
@@ -173,8 +176,11 @@ impl Gui {
         if !d.loaded() || frozen { return; }
         let pps = wave.width() as f64 / zoom / d.rate().max(0.05);
         if r.hovered() {
-            let s = ui.input(|i| i.smooth_scroll_delta.y);
-            if s != 0.0 { let z = &mut self.app.store.settings.zoom; *z = (*z * if s < 0.0 { 1.15 } else { 1.0 / 1.15 }).clamp(1.0, 32.0); }
+            // two-finger scroll: up/down zooms (smoothly: a trackpad sends many small steps), sideways scrubs while paused
+            let sd = ui.input(|i| i.smooth_scroll_delta);
+            if sd.y != 0.0 && sd.y.abs() >= sd.x.abs() { let z = &mut self.app.store.settings.zoom; *z = (*z * (-sd.y as f64 / 200.0).exp()).clamp(1.0, 32.0); }
+            let d = &mut self.app.decks[i];
+            if sd.x != 0.0 && sd.x.abs() > sd.y.abs() && !d.playing { let t = (d.now() - sd.x as f64 / pps).clamp(0.0, d.duration); d.seek(t); }
         }
         let d = &mut self.app.decks[i];
         if r.drag_started() {
@@ -262,23 +268,88 @@ impl Gui {
     // ===================================================================== a deck's controls
     fn deck(&mut self, ui: &mut Ui, i: usize, rect: Rect) {
         let col = deck_color(i);
-        let frozen = self.app.learning();
         let p = ui.painter();
-        p.rect_filled(rect, 5.0, PANEL_D);
-        p.rect_filled(Rect::from_min_size(rect.min, vec2(rect.width(), 2.0)), 1.0, col);
+        p.rect_filled(rect, 6.0, PANEL_D);
+        p.rect_stroke(rect, 6.0, Stroke::new(1.0_f32, LINE), StrokeKind::Inside);
         // the deck the controller is on (4-deck mode) gets an outline
-        if self.side_of(i).is_some() { p.rect_stroke(rect, 5.0, Stroke::new(1.5_f32, col), StrokeKind::Inside); }
+        if self.side_of(i).is_some() { p.rect_stroke(rect, 6.0, Stroke::new(1.5_f32, col), StrokeKind::Inside); }
         // drop a track on the deck
         let resp = ui.interact(rect, ui.id().with(("deckdrop", i)), Sense::hover());
         if let Some(pl) = resp.dnd_release_payload::<DragRows>() { if let Some(id) = pl.ids.first() { let id = id.clone(); self.app.load_id(i, &id); } }
-        if resp.dnd_hover_payload::<DragRows>().is_some() { ui.painter().rect_stroke(rect, 5.0, Stroke::new(2.0_f32, col), StrokeKind::Inside); }
+        if resp.dnd_hover_payload::<DragRows>().is_some() { ui.painter().rect_stroke(rect, 6.0, Stroke::new(2.0_f32, col), StrokeKind::Inside); }
         self.deck_rects[i] = rect;
         self.reg(format!("deck{i}.area"), rect);
-        let inner = Rect::from_min_max(rect.min + vec2(7.0, 6.0), rect.max - vec2(7.0, 5.0));
+        let inner = rect.shrink2(vec2(8.0, 7.0));
+        if inner.height() >= 200.0 { self.deck_tall(ui, i, inner) } else { self.deck_compact(ui, i, inner) }
+    }
+
+    /// two decks: the iOS performance deck. Tempo fader on the outside edge; the jog with SYNC/MT/Q, big CUE and
+    /// PLAY, TAP/GRID beside it; then the loop row, the pad-mode tabs and two rows of pads
+    fn deck_tall(&mut self, ui: &mut Ui, i: usize, inner: Rect) {
+        let col = deck_color(i);
         let h = inner.height();
+        let (rh, font) = (24.0, 11.5);
+        let tempo_w = 24.0;
+        let outer_left = i % 2 == 0;
+        let tempo_r = if outer_left { Rect::from_min_size(inner.min, vec2(tempo_w, h)) } else { Rect::from_min_size(pos2(inner.right() - tempo_w, inner.top()), vec2(tempo_w, h)) };
+        let area = if outer_left { Rect::from_min_max(pos2(tempo_r.right() + 10.0, inner.top()), inner.max) } else { Rect::from_min_max(inner.min, pos2(tempo_r.left() - 10.0, inner.bottom())) };
+        self.tempo(ui, i, tempo_r, rh, font);
+        let pad_h = ((h - 2.0 * rh) * 0.2).clamp(24.0, 40.0);
+        let bottom_h = 2.0 * rh + 2.0 * pad_h + 4.0 * GAP;
+        let top = Rect::from_min_max(area.min, pos2(area.right(), area.bottom() - bottom_h - 4.0));
+        // jog + the cluster beside it, centred in the top block
+        let jog_d = top.height().min(area.width() * 0.42);
+        let cw = (area.width() - jog_d - 16.0).min(176.0);
+        let gx = area.left() + (area.width() - jog_d - 16.0 - cw) / 2.0;
+        let jr = Rect::from_min_size(pos2(gx, top.center().y - jog_d / 2.0), vec2(jog_d, jog_d));
+        self.jog(ui, i, jr);
+        let cx = jr.right() + 16.0;
+        let cb = (top.height() - 2.0 * rh - 4.0 * GAP).clamp(34.0, 56.0);
+        let ch = 2.0 * rh + cb + 2.0 * GAP * 2.0;
+        let y0 = top.center().y - ch / 2.0;
+        let r_sync = Rect::from_min_size(pos2(cx, y0), vec2(cw, rh));
+        let r_cp = Rect::from_min_size(pos2(cx, r_sync.bottom() + 2.0 * GAP), vec2(cw, cb));
+        let r_tap = Rect::from_min_size(pos2(cx, r_cp.bottom() + 2.0 * GAP), vec2(cw, rh));
+        {
+            let ui = &mut row_ui(ui, r_sync);
+            let d = &self.app.decks[i];
+            let (sync, mt, q) = (d.sync, d.mt, d.quant);
+            let u = (cw - 2.0 * GAP) / 3.4;
+            let r = button(ui, "SYNC", vec2(u * 1.4, rh), sync, col, font);
+            if !self.learn(ui, &r, "sync", i as i8) && r.clicked() { self.app.set_sync(i, !sync); }
+            let r = button(ui, "MT", vec2(u, rh), mt, col, font).on_hover_text("Master tempo (keylock): change tempo without changing the key");
+            if !self.learn(ui, &r, "keylock", i as i8) && r.clicked() { self.app.set_mt(i, !mt); }
+            let r = button(ui, "Q", vec2(u, rh), q, col, font).on_hover_text("Quantize: snap cues and loops to the beat grid");
+            if !self.learn(ui, &r, "quant", i as i8) && r.clicked() { self.app.decks[i].quant = !q; }
+        }
+        let gap = (cw - 2.0 * cb) / 3.0;
+        let cue_r = Rect::from_min_size(pos2(cx + gap, r_cp.top()), vec2(cb, cb));
+        let play_r = Rect::from_min_size(pos2(cx + 2.0 * gap + cb, r_cp.top()), vec2(cb, cb));
+        self.cue_play(ui, i, cue_r, play_r, cb);
+        {
+            let ui = &mut row_ui(ui, r_tap);
+            let u = (cw - 2.0 * GAP) / 3.0;
+            if button(ui, "TAP", vec2(u, rh), false, col, font).on_hover_text("Tap along with the beat (4+ taps) to set the BPM").clicked() { self.app.decks[i].tap(); }
+            let g = self.app.ui.grid_open[i];
+            let r = button(ui, "GRID", vec2(u, rh), g, col, font).on_hover_text("Edit the beat grid");
+            self.reg(format!("deck{i}.grid"), r.rect);
+            if r.clicked() { self.app.ui.grid_open[i] = !g; }
+            self.loop_len(ui, i, vec2(u, rh), font);
+        }
+        let bottom = Rect::from_min_max(pos2(area.left(), area.bottom() - bottom_h), area.max);
+        let r_loop = Rect::from_min_size(bottom.min, vec2(bottom.width(), rh));
+        self.loop_row(ui, i, r_loop, rh, font);
+        let rest = Rect::from_min_max(pos2(bottom.left(), r_loop.bottom() + GAP), bottom.max);
+        self.pads(ui, i, rest, rh, font);
+    }
+
+    /// four decks: the same controls squeezed into half the height; jog on the outside, buttons and pads inside
+    fn deck_compact(&mut self, ui: &mut Ui, i: usize, inner: Rect) {
+        let h = inner.height();
+        let col = deck_color(i);
         let rh = ((h - 4.0 * GAP) / 5.0).clamp(17.0, 26.0);
         let font = (rh * 0.46).clamp(9.5, 12.0);
-        let cb = (rh + 6.0).clamp(24.0, 34.0); // CUE / PLAY
+        let cb = (rh + 6.0).clamp(24.0, 34.0);
         let jog_d = (h - cb - GAP).min(inner.width() * 0.27).max(50.0);
         let tempo_w = 22.0;
         let mirror = i % 2 == 1;
@@ -291,57 +362,14 @@ impl Gui {
             let j = Rect::from_min_size(pos2(t.left() - 6.0 - jog_d, inner.top()), vec2(jog_d, h));
             (t, j, Rect::from_min_max(inner.min, pos2(j.left() - 8.0, inner.bottom())))
         };
-        // ---- tempo fader (top = slower, like a CDJ) and its range
-        {
-            let ui = &mut ui.new_child(UiBuilder::new().max_rect(tempo_r).layout(Layout::top_down(Align::Center)));
-            ui.spacing_mut().item_spacing = vec2(0.0, GAP);
-            let mut v = (0.5 - self.app.decks[i].pitch / 2.0) as f32;
-            let r = vslider(ui, &mut v, vec2(tempo_w, (h - rh - GAP).max(40.0)), true, frozen).on_hover_text("Tempo (double-click: 0%)");
-            if !self.learn(ui, &r, "tempo", i as i8) && r.changed() { self.app.decks[i].set_pitch((0.5 - v as f64) * 2.0); }
-            let rl = RANGES[self.app.decks[i].range_idx];
-            if button(ui, &if rl == 100.0 { "W".to_string() } else { format!("{rl}") }, vec2(tempo_w, rh), false, col, font - 1.0).on_hover_text("Tempo range").clicked() { self.app.decks[i].cycle_range(); }
-        }
-        // ---- jog, then CUE / PLAY under it
-        {
-            let jr = Rect::from_center_size(pos2(jog_r.center().x, jog_r.top() + jog_d / 2.0), vec2(jog_d, jog_d));
-            let resp = ui.interact(jr, ui.id().with(("jog", i)), Sense::click_and_drag());
-            paint_jog(ui.painter(), jr, &self.app.decks[i], i);
-            if !self.learn(ui, &resp, "jog", i as i8) {
-                let ang = |p: egui::Pos2| (p.y - jr.center().y).atan2(p.x - jr.center().x);
-                if resp.drag_started() || (resp.is_pointer_button_down_on() && self.jog_last[i].is_none()) {
-                    if let Some(p) = resp.interact_pointer_pos() { self.jog_last[i] = Some(ang(p)); self.app.decks[i].jog_touch(true, false); }
-                }
-                if let (Some(last), Some(p)) = (self.jog_last[i], resp.interact_pointer_pos()) {
-                    let a = ang(p);
-                    let mut da = a - last;
-                    if da > std::f32::consts::PI { da -= std::f32::consts::TAU; }
-                    if da < -std::f32::consts::PI { da += std::f32::consts::TAU; }
-                    if da != 0.0 { self.app.decks[i].jog_ticks(da as f64 / std::f64::consts::TAU * 720.0, JogKind::Scratch); }
-                    self.jog_last[i] = Some(a);
-                }
-                if self.jog_last[i].is_some() && !resp.is_pointer_button_down_on() { self.jog_last[i] = None; self.app.decks[i].jog_touch(false, false); }
-            }
-            let y = jog_r.bottom() - cb / 2.0;
-            let gap = ((jog_d - 2.0 * cb) / 3.0).max(4.0);
-            let cue_r = Rect::from_center_size(pos2(jog_r.left() + gap + cb / 2.0, y), vec2(cb, cb));
-            let play_r = Rect::from_center_size(pos2(jog_r.right() - gap - cb / 2.0, y), vec2(cb, cb));
-            let d = &self.app.decks[i];
-            let cue_lit = d.loaded() && (d.previewing || (d.now() - d.cue).abs() < 0.03);
-            let playing = d.playing;
-            let r = { let u = &mut ui.new_child(UiBuilder::new().max_rect(cue_r)); round_button(u, "CUE", cb, cue_lit, CUE) };
-            if !self.learn(ui, &r, "cue", i as i8) {
-                if r.is_pointer_button_down_on() && ui.input(|x| x.pointer.any_pressed()) { self.app.decks[i].cue_down(); }
-                if r.drag_stopped() || r.clicked() { self.app.decks[i].cue_up(); }
-            }
-            let r = { let u = &mut ui.new_child(UiBuilder::new().max_rect(play_r)); round_button(u, if playing { "❚❚" } else { "▶" }, cb, playing, GREEN) };
-            if !self.learn(ui, &r, "play", i as i8) && r.clicked() { self.app.toggle_play(i); }
-        }
-        // ---- the button rows and the pads
+        self.tempo(ui, i, tempo_r, rh, font);
+        self.jog(ui, i, Rect::from_min_size(pos2(jog_r.left(), jog_r.top()), vec2(jog_d, jog_d)));
+        let y = jog_r.bottom() - cb;
+        let gap = ((jog_d - 2.0 * cb) / 3.0).max(4.0);
+        self.cue_play(ui, i, Rect::from_min_size(pos2(jog_r.left() + gap, y), vec2(cb, cb)), Rect::from_min_size(pos2(jog_r.left() + jog_d - gap - cb, y), vec2(cb, cb)), cb);
         let w = ctrl_r.width();
-        let mut y = ctrl_r.top();
-        let mut next_row = |hh: f32| { let r = Rect::from_min_size(pos2(ctrl_r.left(), y), vec2(w, hh)); y += hh + GAP; r };
-        let r0 = next_row(rh);
-        let r1 = next_row(rh);
+        let r0 = Rect::from_min_size(ctrl_r.min, vec2(w, rh));
+        let r1 = Rect::from_min_size(pos2(ctrl_r.left(), r0.bottom() + GAP), vec2(w, rh));
         {
             let ui = &mut row_ui(ui, r0);
             let d = &self.app.decks[i];
@@ -349,37 +377,93 @@ impl Gui {
             let u = (w - 4.0 * GAP) / 5.4;
             let r = button(ui, "SYNC", vec2(u * 1.4, rh), sync, col, font);
             if !self.learn(ui, &r, "sync", i as i8) && r.clicked() { self.app.set_sync(i, !sync); }
-            let r = button(ui, "MT", vec2(u, rh), mt, col, font).on_hover_text("Master tempo (keylock): change tempo without changing the key");
+            let r = button(ui, "MT", vec2(u, rh), mt, col, font).on_hover_text("Master tempo (keylock)");
             if !self.learn(ui, &r, "keylock", i as i8) && r.clicked() { self.app.set_mt(i, !mt); }
-            let r = button(ui, "Q", vec2(u, rh), q, col, font).on_hover_text("Quantize: snap cues and loops to the beat grid");
+            let r = button(ui, "Q", vec2(u, rh), q, col, font).on_hover_text("Quantize");
             if !self.learn(ui, &r, "quant", i as i8) && r.clicked() { self.app.decks[i].quant = !q; }
             let r = button(ui, "GRID", vec2(u, rh), grid_open, col, font).on_hover_text("Edit the beat grid");
             self.reg(format!("deck{i}.grid"), r.rect);
             if r.clicked() { self.app.ui.grid_open[i] = !grid_open; }
-            let d = &self.app.decks[i];
-            let lb = d.loop_beats();
-            let info = match (d.lp.a, d.lp.b) { (None, _) => "—".to_string(), (Some(_), None) => "IN…".into(), _ => frac_text(lb) };
-            let lr = button(ui, &info, vec2(u, rh), false, LOOP, font).on_hover_text("Loop length in beats");
-            ui.painter().rect_stroke(lr.rect, 4.0, Stroke::new(1.0_f32, if d.lp.on { LOOP } else { LINE2 }), StrokeKind::Inside);
+            self.loop_len(ui, i, vec2(u, rh), font);
         }
-        {
-            let ui = &mut row_ui(ui, r1);
-            let d = &self.app.decks[i];
-            let (lp_on, a_set, b_set) = (d.lp.on, d.lp.a.is_some(), d.lp.b.is_some());
-            let u = (w - 6.0 * GAP) / 7.2;
-            let r = button(ui, "IN", vec2(u, rh), lp_on || (a_set && !b_set), LOOP, font);
-            if !self.learn(ui, &r, "loopIn", i as i8) && r.clicked() { self.app.decks[i].loop_in(); }
-            let r = button(ui, "OUT", vec2(u, rh), lp_on, LOOP, font);
-            if !self.learn(ui, &r, "loopOut", i as i8) && r.clicked() { self.app.decks[i].loop_out(); }
-            let r = button(ui, "RELOOP", vec2(u * 1.6, rh), b_set, LOOP, font - 1.0);
-            if !self.learn(ui, &r, "reloop", i as i8) && r.clicked() { self.app.decks[i].reloop_exit(); }
-            if button(ui, "½", vec2(u * 0.8, rh), false, LOOP, font).on_hover_text("Halve loop").clicked() { self.app.decks[i].loop_scale(0.5); }
-            if button(ui, "×2", vec2(u * 0.8, rh), false, LOOP, font).on_hover_text("Double loop").clicked() { self.app.decks[i].loop_scale(2.0); }
-            if button(ui, "◀4", vec2(u, rh), false, col, font).on_hover_text("Jump back 4 beats").clicked() { self.app.decks[i].beat_jump(-4.0); }
-            if button(ui, "4▶", vec2(u, rh), false, col, font).on_hover_text("Jump on 4 beats").clicked() { self.app.decks[i].beat_jump(4.0); }
+        self.loop_row(ui, i, r1, rh, font);
+        let rest = Rect::from_min_max(pos2(ctrl_r.left(), r1.bottom() + GAP), ctrl_r.max);
+        self.pads(ui, i, rest, rh, font);
+    }
+
+    /// tempo fader (top = slower, like a CDJ) and its range under it
+    fn tempo(&mut self, ui: &mut Ui, i: usize, r: Rect, rh: f32, font: f32) {
+        let frozen = self.app.learning();
+        let ui = &mut ui.new_child(UiBuilder::new().max_rect(r).layout(Layout::top_down(Align::Center)));
+        ui.spacing_mut().item_spacing = vec2(0.0, GAP);
+        let mut v = (0.5 - self.app.decks[i].pitch / 2.0) as f32;
+        let rs = vslider(ui, &mut v, vec2(r.width(), (r.height() - rh - GAP).max(40.0)), true, frozen).on_hover_text("Tempo (double-click: 0%)");
+        if !self.learn(ui, &rs, "tempo", i as i8) && rs.changed() { self.app.decks[i].set_pitch((0.5 - v as f64) * 2.0); }
+        let rl = RANGES[self.app.decks[i].range_idx];
+        let label = if rl == 100.0 { "W".to_string() } else { format!("±{rl}") };
+        if button(ui, &label, vec2(r.width(), rh), false, deck_color(i), font - 2.0).on_hover_text("Tempo range").clicked() { self.app.decks[i].cycle_range(); }
+    }
+    fn jog(&mut self, ui: &mut Ui, i: usize, jr: Rect) {
+        let resp = ui.interact(jr, ui.id().with(("jog", i)), Sense::click_and_drag());
+        paint_jog(ui.painter(), jr, &self.app.decks[i], i);
+        if self.learn(ui, &resp, "jog", i as i8) { return; }
+        let ang = |p: egui::Pos2| (p.y - jr.center().y).atan2(p.x - jr.center().x);
+        if resp.drag_started() || (resp.is_pointer_button_down_on() && self.jog_last[i].is_none()) {
+            if let Some(p) = resp.interact_pointer_pos() { self.jog_last[i] = Some(ang(p)); self.app.decks[i].jog_touch(true, false); }
         }
-        let rest = Rect::from_min_max(pos2(ctrl_r.left(), y), ctrl_r.max);
+        if let (Some(last), Some(p)) = (self.jog_last[i], resp.interact_pointer_pos()) {
+            let a = ang(p);
+            let mut da = a - last;
+            if da > std::f32::consts::PI { da -= std::f32::consts::TAU; }
+            if da < -std::f32::consts::PI { da += std::f32::consts::TAU; }
+            if da != 0.0 { self.app.decks[i].jog_ticks(da as f64 / std::f64::consts::TAU * 720.0, JogKind::Scratch); }
+            self.jog_last[i] = Some(a);
+        }
+        if self.jog_last[i].is_some() && !resp.is_pointer_button_down_on() { self.jog_last[i] = None; self.app.decks[i].jog_touch(false, false); }
+    }
+    fn cue_play(&mut self, ui: &mut Ui, i: usize, cue_r: Rect, play_r: Rect, cb: f32) {
+        let d = &self.app.decks[i];
+        let cue_lit = d.loaded() && (d.previewing || (d.now() - d.cue).abs() < 0.03);
+        let playing = d.playing;
+        let r = { let u = &mut ui.new_child(UiBuilder::new().max_rect(cue_r)); round_button(u, "CUE", cb, cue_lit, CUE) };
+        if !self.learn(ui, &r, "cue", i as i8) {
+            if r.is_pointer_button_down_on() && ui.input(|x| x.pointer.any_pressed()) { self.app.decks[i].cue_down(); }
+            if r.drag_stopped() || r.clicked() { self.app.decks[i].cue_up(); }
+        }
+        let r = { let u = &mut ui.new_child(UiBuilder::new().max_rect(play_r)); round_button(u, if playing { "❚❚" } else { "▶" }, cb, playing, GREEN) };
+        if !self.learn(ui, &r, "play", i as i8) && r.clicked() { self.app.toggle_play(i); }
+    }
+    /// the loop's length in beats (outlined while it's on)
+    fn loop_len(&mut self, ui: &mut Ui, i: usize, size: egui::Vec2, font: f32) {
+        let d = &self.app.decks[i];
+        let info = match (d.lp.a, d.lp.b) { (None, _) => "—".to_string(), (Some(_), None) => "IN…".into(), _ => frac_text(d.loop_beats()) };
+        let on = d.lp.on;
+        let lr = button(ui, &info, size, false, LOOP, font).on_hover_text("Loop length in beats");
+        ui.painter().rect_stroke(lr.rect, 4.0, Stroke::new(1.0_f32, if on { LOOP } else { LINE2 }), StrokeKind::Inside);
+    }
+    fn loop_row(&mut self, ui: &mut Ui, i: usize, r: Rect, rh: f32, font: f32) {
+        let col = deck_color(i);
+        let w = r.width();
+        let ui = &mut row_ui(ui, r);
+        let d = &self.app.decks[i];
+        let (lp_on, a_set, b_set) = (d.lp.on, d.lp.a.is_some(), d.lp.b.is_some());
+        let u = (w - 6.0 * GAP) / 7.2;
+        let rr = button(ui, "IN", vec2(u, rh), lp_on || (a_set && !b_set), LOOP, font);
+        if !self.learn(ui, &rr, "loopIn", i as i8) && rr.clicked() { self.app.decks[i].loop_in(); }
+        let rr = button(ui, "OUT", vec2(u, rh), lp_on, LOOP, font);
+        if !self.learn(ui, &rr, "loopOut", i as i8) && rr.clicked() { self.app.decks[i].loop_out(); }
+        let rr = button(ui, "RELOOP", vec2(u * 1.6, rh), b_set, LOOP, font - 1.0);
+        if !self.learn(ui, &rr, "reloop", i as i8) && rr.clicked() { self.app.decks[i].reloop_exit(); }
+        if button(ui, "½", vec2(u * 0.8, rh), false, LOOP, font).on_hover_text("Halve loop").clicked() { self.app.decks[i].loop_scale(0.5); }
+        if button(ui, "×2", vec2(u * 0.8, rh), false, LOOP, font).on_hover_text("Double loop").clicked() { self.app.decks[i].loop_scale(2.0); }
+        if button(ui, "◀4", vec2(u, rh), false, col, font).on_hover_text("Jump back 4 beats").clicked() { self.app.decks[i].beat_jump(-4.0); }
+        if button(ui, "4▶", vec2(u, rh), false, col, font).on_hover_text("Jump on 4 beats").clicked() { self.app.decks[i].beat_jump(4.0); }
+    }
+    /// the pad-mode tabs and 8 pads (or the grid editor while it's open)
+    fn pads(&mut self, ui: &mut Ui, i: usize, rest: Rect, rh: f32, font: f32) {
         if self.app.ui.grid_open[i] { self.grid_bar(ui, i, rest, rh, font); return; }
+        let col = deck_color(i);
+        let w = rest.width();
         let r2 = Rect::from_min_size(rest.min, vec2(w, rh));
         {
             let ui = &mut row_ui(ui, r2);
@@ -391,12 +475,12 @@ impl Gui {
             }
         }
         let pads_top = r2.bottom() + GAP;
-        let pad_h = ((ctrl_r.bottom() - pads_top - GAP) / 2.0).clamp(14.0, 64.0);
+        let pad_h = ((rest.bottom() - pads_top - GAP) / 2.0).clamp(14.0, 44.0);
         let pw = (w - 3.0 * GAP) / 4.0;
         for row in 0..2 {
             for c in 0..4 {
                 let pidx = row * 4 + c;
-                let pr = Rect::from_min_size(pos2(ctrl_r.left() + c as f32 * (pw + GAP), pads_top + row as f32 * (pad_h + GAP)), vec2(pw, pad_h));
+                let pr = Rect::from_min_size(pos2(rest.left() + c as f32 * (pw + GAP), pads_top + row as f32 * (pad_h + GAP)), vec2(pw, pad_h));
                 let d = &self.app.decks[i];
                 let fx_mode = d.pad_mode.fx_bank().is_some();
                 let (label, lit, accent) = match d.pad_mode {
@@ -472,13 +556,10 @@ impl Gui {
         let xf_h = 22.0;
         let strips = Rect::from_min_max(inner.min, pos2(inner.right(), inner.bottom() - fx_h - xf_h - 2.0 * GAP));
         let sw = (strips.width() - (n - 1) as f32 * GAP) / n as f32;
-        // knobs: as many columns as fit, then as big as the height allows
-        let cols = ((sw / 32.0).floor() as usize).clamp(1, 3);
-        let rows = 5usize.div_ceil(cols);
-        let fader_min = 46.0;
-        let knobs_h = (strips.height() - 14.0 - rh - fader_min - 3.0 * GAP).max(40.0);
-        let ks = ((sw / cols as f32) - 10.0).min(knobs_h / rows as f32 - 13.0).clamp(12.0, 26.0);
-        let kh = ks + 13.0;
+        // one column per channel, top to bottom like the FLX4: TRIM, HI, MID, LOW, CFX, CUE, then the fader + meter
+        let fader_min = 60.0;
+        let kh = ((strips.height() - 16.0 - rh - fader_min - 3.0 * GAP) / 5.0).clamp(18.0, 34.0);
+        let ks = (kh - 4.0).min(sw - 34.0).clamp(12.0, 26.0);
         for (k, &i) in chans.iter().enumerate() {
             let col = deck_color(i);
             let sr = Rect::from_min_size(pos2(strips.left() + k as f32 * (sw + GAP), strips.top()), vec2(sw, strips.height()));
@@ -487,28 +568,32 @@ impl Gui {
             ui.painter().rect_filled(tab_r, 3.0, if self.app.decks[i].loaded() { col } else { Color32::from_rgba_unmultiplied(col.r(), col.g(), col.b(), 60) });
             ui.painter().text(tab_r.center(), egui::Align2::CENTER_CENTER, format!("{}", i + 1), bold(11.0), BG);
             let names: [(&str, &str); 5] = [("TRIM", "trim"), ("HI", "hi"), ("MID", "mid"), ("LOW", "low"), ("CFX", "cfx")];
-            let cw = sw / cols as f32;
+            // knob and its label side by side, centred in the strip
+            let kw = ks + 8.0 + 26.0;
+            let kx = sr.center().x - kw / 2.0;
             for (q, (label, key)) in names.iter().enumerate() {
-                let (cx, cy) = (q % cols, q / cols);
-                let kr = Rect::from_min_size(pos2(sr.left() + cx as f32 * cw, tab_r.bottom() + 2.0 + cy as f32 * kh), vec2(cw, kh));
+                let y = tab_r.bottom() + 2.0 + q as f32 * kh;
+                ui.painter().text(pos2(kx + 24.0, y + kh / 2.0), egui::Align2::RIGHT_CENTER, *label, prop(8.5), MUTED);
+                let kr = Rect::from_min_size(pos2(kx + 26.0, y + (kh - ks - 4.0) / 2.0), vec2(ks + 8.0, ks + 4.0));
                 let ui = &mut ui.new_child(UiBuilder::new().max_rect(kr).layout(Layout::top_down(Align::Center)));
                 let m = &self.app.mixer;
                 let mut v = match *key { "trim" => m.trim[i], "hi" => m.hi[i], "mid" => m.mid[i], "low" => m.low[i], _ => m.cfx[i] };
-                let r = knob(ui, &mut v, label, if *key == "cfx" { LOOP } else { col }, 0.5, ks, frozen);
+                let r = knob(ui, &mut v, "", if *key == "cfx" { LOOP } else { col }, 0.5, ks, frozen).on_hover_text(*label);
                 if !self.learn(ui, &r, key, i as i8) && r.changed() {
                     let m = &mut self.app.mixer;
                     match *key { "trim" => m.trim[i] = v, "hi" => m.hi[i] = v, "mid" => m.mid[i] = v, "low" => m.low[i] = v, _ => m.cfx[i] = v }
                     self.app.send_mixer();
                 }
             }
-            let cue_top = tab_r.bottom() + 2.0 + rows as f32 * kh + GAP;
-            let cue_r = Rect::from_min_size(pos2(sr.center().x - (sw - 8.0).min(44.0) / 2.0, cue_top), vec2((sw - 8.0).min(44.0), rh));
+            let cue_top = tab_r.bottom() + 2.0 + 5.0 * kh + GAP;
+            let cw = (sw - 8.0).min(48.0);
+            let cue_r = Rect::from_min_size(pos2(sr.center().x - cw / 2.0, cue_top), vec2(cw, rh));
             let lit = self.app.mixer.pfl[i];
             let r = { let u = &mut ui.new_child(UiBuilder::new().max_rect(cue_r)); button(u, "CUE", cue_r.size(), lit, CUE, 10.5) };
             if !self.learn(ui, &r, "pfl", i as i8) && r.clicked() { self.app.mixer.pfl[i] = !lit; self.app.send_mixer(); }
             let fh = sr.bottom() - cue_r.bottom() - 2.0 * GAP;
             let fr = Rect::from_min_size(pos2(sr.center().x - 15.0, cue_r.bottom() + GAP), vec2(22.0, fh));
-            let mr = Rect::from_min_size(pos2(fr.right() + 3.0, fr.top() + 4.0), vec2(5.0, fh - 8.0));
+            let mr = Rect::from_min_size(pos2(fr.right() + 4.0, fr.top() + 4.0), vec2(5.0, fh - 8.0));
             paint_meter(ui.painter(), mr, level(self.app.status_snap.meters[i]));
             let mut v = self.app.mixer.fader[i];
             let r = { let u = &mut ui.new_child(UiBuilder::new().max_rect(fr)); vslider(u, &mut v, fr.size(), false, frozen) };
@@ -586,7 +671,8 @@ impl Gui {
         ui.painter().hline(rect.x_range(), rect.top(), Stroke::new(1.0_f32, LINE));
         let tool_h = 30.0;
         let tool = Rect::from_min_size(rect.min, vec2(rect.width(), tool_h));
-        let tree_w = (rect.width() * 0.17).clamp(170.0, 240.0);
+        let tw = self.app.store.settings.tree_w;
+        let tree_w = if tw > 0.0 { tw.clamp(120.0, rect.width() * 0.5) } else { (rect.width() * 0.17).clamp(170.0, 240.0) };
         let tree = Rect::from_min_max(pos2(rect.left(), tool.bottom()), pos2(rect.left() + tree_w, rect.bottom()));
         let list = Rect::from_min_max(pos2(tree.right(), tool.bottom()), rect.max);
         {
@@ -603,6 +689,13 @@ impl Gui {
             let ui = &mut ui.new_child(UiBuilder::new().max_rect(list.shrink2(vec2(1.0, 0.0))).layout(Layout::top_down(Align::Min)));
             self.track_list(ui);
         }
+        // drag the line between the playlists and the tracks (double-click: back to automatic)
+        let handle = Rect::from_min_max(pos2(tree.right() - 3.0, tree.top()), pos2(tree.right() + 3.0, tree.bottom()));
+        let r = ui.interact(handle, ui.id().with("tree_split"), Sense::click_and_drag()).on_hover_cursor(egui::CursorIcon::ResizeHorizontal);
+        if r.hovered() || r.dragged() { ui.painter().vline(tree.right(), tree.y_range(), Stroke::new(2.0_f32, deck_color(0))); }
+        if r.dragged() { if let Some(p) = r.interact_pointer_pos() { self.app.store.settings.tree_w = (p.x - rect.left()).clamp(120.0, rect.width() * 0.5); } }
+        if r.drag_stopped() { self.app.store.dirty_settings = true; }
+        if r.double_clicked() { self.app.store.settings.tree_w = 0.0; self.app.store.dirty_settings = true; }
     }
 
     fn toolbar(&mut self, ui: &mut Ui) {
@@ -626,6 +719,7 @@ impl Gui {
         if matches!(self.app.view, View::Pl(_)) && ui.button("Remove from list").on_hover_text("Remove the selected tracks from this playlist (Delete key)").clicked() { self.app.remove_from_playlist(); }
         let r = ui.add(egui::TextEdit::singleline(&mut self.app.list.query).hint_text("Search title, artist or key (8A)").desired_width(200.0));
         self.reg("search", r.rect);
+        if std::mem::take(&mut self.focus_search) { r.request_focus(); }
         if r.changed() { self.app.apply_view(false); }
         let browse = self.app.store.settings.browse;
         if ui.selectable_label(browse, "BROWSE").on_hover_text("Big library, waveforms only (SHIFT + press BROWSE on the FLX4)").clicked() {
@@ -1051,15 +1145,85 @@ impl Gui {
 
     fn keyboard(&mut self, ctx: &egui::Context) {
         if ctx.wants_keyboard_input() { return; }
-        let (down, up, left, right, del, all, esc, shift) = ctx.input(|i| (i.key_pressed(Key::ArrowDown), i.key_pressed(Key::ArrowUp), i.key_pressed(Key::ArrowLeft), i.key_pressed(Key::ArrowRight),
-            i.key_pressed(Key::Delete) || i.key_pressed(Key::Backspace), i.modifiers.command && i.key_pressed(Key::A), i.key_pressed(Key::Escape), i.modifiers.shift));
+        // presses and releases (not key repeat), so CUE and PAD FX can be held
+        let evs: Vec<(Key, bool, egui::Modifiers)> = ctx.input(|i| i.events.iter().filter_map(|e| match e {
+            egui::Event::Key { key, pressed, repeat: false, modifiers, .. } => Some((*key, *pressed, *modifiers)),
+            _ => None,
+        }).collect());
+        let (down, up) = ctx.input(|i| (i.key_pressed(Key::ArrowDown), i.key_pressed(Key::ArrowUp)));
         if down { self.app.list.move_sel(1); }
         if up { self.app.list.move_sel(-1); }
-        if left && shift { let d = self.app.midi.side[0]; self.app.load_selected(d); }
-        if right && shift { let d = self.app.midi.side[1]; self.app.load_selected(d); }
-        if del && matches!(self.app.view, View::Pl(_)) { self.app.remove_from_playlist(); }
-        if all { self.app.list.sel_ids = self.app.list.view.iter().map(|t| t.id.clone()).collect(); }
-        if esc { if self.app.learning() { self.app.stop_learn(); } self.app.ui.settings_open = false; }
+        for (key, pressed, m) in evs {
+            if !pressed {
+                // let go: CUE preview, held PAD FX
+                if let Some((side, pidx)) = deck_key(key) {
+                    let i = self.app.midi.side[side];
+                    match pidx { Some(p) => { if self.app.decks[i].pad_mode.fx_bank().is_some() { self.app.pad_up(i, p); } } None => if key == Key::Z || key == Key::M { self.app.decks[i].cue_up(); } }
+                }
+                continue;
+            }
+            if m.command || m.ctrl {
+                match key {
+                    Key::A => self.app.list.sel_ids = self.app.list.view.iter().map(|t| t.id.clone()).collect(),
+                    Key::F => self.focus_search = true,
+                    Key::R => self.app.toggle_rec(),
+                    _ => {}
+                }
+                continue;
+            }
+            match key {
+                Key::ArrowLeft if m.shift => { let d = self.app.midi.side[0]; self.app.load_selected(d); }
+                Key::ArrowRight if m.shift => { let d = self.app.midi.side[1]; self.app.load_selected(d); }
+                Key::Enter => { let d = self.load_target(); self.app.load_selected(d); }
+                Key::Delete | Key::Backspace => if matches!(self.app.view, View::Pl(_)) { self.app.remove_from_playlist(); },
+                Key::Escape => { if self.app.learning() { self.app.stop_learn(); } self.app.ui.settings_open = false; self.heat_open = false; self.keys_open = false; }
+                Key::F1 => { let w = &mut self.app.store.settings.wave; *w = !*w; self.app.store.dirty_settings = true; }
+                Key::F2 => { let f = self.app.four(); self.app.set_four(!f); }
+                Key::F3 => { let b = &mut self.app.store.settings.browse; *b = !*b; self.app.store.dirty_settings = true; }
+                Key::F4 => self.heat_open = !self.heat_open,
+                Key::F12 => self.keys_open = !self.keys_open,
+                Key::Backtick => { if let Some(a) = self.app.midi.toggle_side(0) { self.app.midi_action(a); } }
+                Key::Backslash => { if let Some(a) = self.app.midi.toggle_side(1) { self.app.midi_action(a); } }
+                Key::B => { let on = self.app.fx.on; self.app.fx_on(!on); }
+                Key::OpenBracket => self.app.fx_select(-1),
+                Key::CloseBracket => self.app.fx_select(1),
+                Key::Minus => self.app.fx_beat(-1),
+                Key::Equals | Key::Plus => self.app.fx_beat(1),
+                _ => {
+                    let Some((side, pidx)) = deck_key(key) else { continue };
+                    let i = self.app.midi.side[side];
+                    if let Some(p) = pidx { self.app.pad_down(i, p, m.shift); continue; }
+                    let d = &mut self.app.decks[i];
+                    match key {
+                        Key::Z | Key::M => d.cue_down(),
+                        Key::X | Key::Comma => self.app.toggle_play(i),
+                        Key::A | Key::J => { let s = d.sync; self.app.set_sync(i, !s); }
+                        Key::S | Key::K => { if d.lp.on { d.reloop_exit(); } else { d.beat_loop(4.0); } }
+                        Key::D | Key::L => d.loop_scale(0.5),
+                        Key::F | Key::Semicolon => d.loop_scale(2.0),
+                        Key::C | Key::Period => d.beat_jump(-4.0),
+                        Key::V | Key::Slash => d.beat_jump(4.0),
+                        _ => {}
+                    }
+                }
+            }
+        }
+    }
+
+    /// F12: the keyboard shortcuts
+    fn keys_window(&mut self, ctx: &egui::Context) {
+        let mut open = self.keys_open;
+        egui::Window::new("Keyboard shortcuts").open(&mut open).collapsible(false).resizable(false).default_width(520.0).show(ctx, |ui| {
+            egui::Grid::new("keys").num_columns(2).spacing(vec2(18.0, 3.0)).striped(true).show(ui, |ui| {
+                for (k, what) in SHORTCUTS {
+                    if k.is_empty() { ui.label(egui::RichText::new(*what).font(bold(12.0)).color(LOOP)); ui.label(""); ui.end_row(); continue; }
+                    ui.label(egui::RichText::new(*k).font(mono(11.5)).color(FG));
+                    ui.label(egui::RichText::new(*what).size(11.5).color(MUTED));
+                    ui.end_row();
+                }
+            });
+        });
+        self.keys_open = open;
     }
 
     fn dropped_files(&mut self, ctx: &egui::Context) {
@@ -1253,6 +1417,55 @@ impl Gui {
     }
 }
 
+/// a deck key: (controller side, Some(pad) for a pad key). Left hand plays the left side (deck 1, or 3 in
+/// 4-deck mode after a layer switch), right hand the right side.
+fn deck_key(k: Key) -> Option<(usize, Option<usize>)> {
+    use Key::*;
+    let left = [Num1, Num2, Num3, Num4, Q, W, E, R];
+    let right = [Num7, Num8, Num9, Num0, U, I, O, P];
+    if let Some(p) = left.iter().position(|x| *x == k) { return Some((0, Some(p))); }
+    if let Some(p) = right.iter().position(|x| *x == k) { return Some((1, Some(p))); }
+    match k { Z | X | A | S | D | F | C | V => Some((0, None)), M | Comma | J | K | L | Semicolon | Period | Slash => Some((1, None)), _ => None }
+}
+/// the shortcut list (the F12 window; same as docs/keyboard.md)
+pub const SHORTCUTS: &[(&str, &str)] = &[
+    ("", "Decks: left hand = left deck (1, or 3), right hand = right deck (2, or 4)"),
+    ("X   ,", "Play / pause"),
+    ("Z   M", "CUE (hold to preview)"),
+    ("A   J", "SYNC"),
+    ("S   K", "4-beat loop on / off"),
+    ("D   L", "Loop ½"),
+    ("F   ;", "Loop ×2"),
+    ("C   .", "Beat jump back 4"),
+    ("V   /", "Beat jump on 4"),
+    ("1 2 3 4  Q W E R", "Left deck pads 1-8 (Shift: delete hot cue)"),
+    ("7 8 9 0  U I O P", "Right deck pads 1-8 (Shift: delete hot cue)"),
+    ("`   \\", "Layer: left side 1 ⇄ 3, right side 2 ⇄ 4 (4 decks)"),
+    ("", "Beat FX"),
+    ("B", "FX on / off"),
+    ("[   ]", "Previous / next effect"),
+    ("-   =", "Fewer / more beats"),
+    ("", "Library"),
+    ("↑ ↓", "Move through the tracks"),
+    ("Enter", "Load onto the first free deck"),
+    ("Shift ← / →", "Load onto the left / right deck"),
+    ("Ctrl F", "Search"),
+    ("Ctrl A", "Select all"),
+    ("Delete", "Remove from this playlist"),
+    ("", "Screen"),
+    ("F1", "WAVE (just the waveforms)"),
+    ("F2", "4 DECKS"),
+    ("F3", "BROWSE (big library)"),
+    ("F4", "HEAT panel"),
+    ("Ctrl R", "REC on / off"),
+    ("F12", "This list"),
+    ("Esc", "Close panels, stop MIDI learn"),
+    ("", "Trackpad"),
+    ("Drag", "Knobs: up/down (Shift: fine) · faders: grab and slide"),
+    ("Two-finger scroll", "Knobs and faders: nudge · waveform: zoom (sideways: scrub while paused)"),
+    ("Double-click", "Knob / tempo / crossfader back to the middle"),
+];
+
 fn pill(ui: &mut Ui, text: &str, on: bool) -> Response {
     let g = ui.painter().layout_no_wrap(text.to_string(), prop(11.0), FG);
     let (rect, r) = ui.allocate_exact_size(vec2(g.size().x + 26.0, 20.0), Sense::hover());
@@ -1311,7 +1524,12 @@ impl eframe::App for Gui {
             let mut top = full.top() + n * (lane_h + GAP) + 2.0;
             // ---- decks either side of the mixer (4 decks: 1 over 3 on the left, 2 over 4 on the right)
             if !browse {
-                let row_h = if four { (full.height() * 0.46).clamp(300.0, 440.0) } else { (full.height() * 0.37).clamp(230.0, 330.0) };
+                let auto = if four { (full.height() * 0.46).clamp(300.0, 440.0) } else { (full.height() * 0.47).clamp(260.0, 400.0) };
+                // the library's top edge drags (double-click: back to automatic); the decks take what's left
+                let min_row = if four { 280.0 } else { 230.0 };
+                let max_row = (full.bottom() - top - 90.0).max(min_row);
+                let lib_h = self.app.store.settings.lib_h;
+                let row_h = if lib_h > 0.0 { (full.bottom() - lib_h - top - GAP - 2.0).clamp(min_row, max_row) } else { auto.min(max_row) };
                 let mixer_w = if four { 300.0 } else { 250.0 };
                 let dw = (full.width() - mixer_w - 2.0 * GAP) / 2.0;
                 let mx = Rect::from_min_size(pos2(full.left() + dw + GAP, top), vec2(mixer_w, row_h));
@@ -1323,6 +1541,13 @@ impl eframe::App for Gui {
                 }
                 self.mixer(ui, mx);
                 top += row_h + GAP + 2.0;
+                let handle = Rect::from_min_max(pos2(full.left(), top - GAP - 2.0), pos2(full.right(), top + 3.0));
+                let r = ui.interact(handle, ui.id().with("lib_split"), Sense::click_and_drag()).on_hover_cursor(egui::CursorIcon::ResizeVertical);
+                self.reg("lib_split", handle);
+                if r.hovered() || r.dragged() { ui.painter().hline(handle.x_range(), handle.center().y, Stroke::new(2.0_f32, deck_color(0))); }
+                if r.dragged() { if let Some(p) = r.interact_pointer_pos() { self.app.store.settings.lib_h = (full.bottom() - p.y).max(90.0); } }
+                if r.drag_stopped() { self.app.store.dirty_settings = true; }
+                if r.double_clicked() { self.app.store.settings.lib_h = 0.0; self.app.store.dirty_settings = true; }
             }
             let lib = Rect::from_min_max(pos2(full.left(), top), full.max);
             let ui = &mut ui.new_child(UiBuilder::new().max_rect(lib).layout(Layout::top_down(Align::Min)));
@@ -1330,6 +1555,7 @@ impl eframe::App for Gui {
         });
         if self.app.ui.settings_open { self.settings(ctx); }
         if self.heat_open { self.heat_panel(ctx); } else { self.app.heat.set_panel(false); }
+        if self.keys_open { self.keys_window(ctx); }
         self.dialogs(ctx);
         if let Some((path, at)) = &self.test_shot {
             if self.frames == *at { ctx.send_viewport_cmd(egui::ViewportCommand::Screenshot(Default::default())); }

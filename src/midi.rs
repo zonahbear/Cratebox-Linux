@@ -30,7 +30,8 @@ pub const FLX4_KEEPALIVE: &[u8] = &[0xf0, 0x00, 0x40, 0x05, 0x00, 0x00, 0x04, 0x
 pub fn profiles() -> Vec<Profile> {
     let p = |id, name, src, vu, leds| Profile { id, name, src, keep_alive: None, init: None, vu, leds };
     let mut v = vec![
-        Profile { keep_alive: Some(FLX4_KEEPALIVE), ..p("ddj-flx4", "Pioneer DDJ-FLX4", Src::Tested, true, true) },
+        // FLX4: the keep-alive doubles as "send me every control's position" (Mixxx's DDJ-FLX4 script), so it goes at connect too
+        Profile { keep_alive: Some(FLX4_KEEPALIVE), init: Some(FLX4_KEEPALIVE), ..p("ddj-flx4", "Pioneer DDJ-FLX4", Src::Tested, true, true) },
         Profile { init: Some(&[0xf0, 0x00, 0x40, 0x05, 0x00, 0x00, 0x02, 0x06, 0x00, 0x03, 0x01, 0xf7]), ..p("ddj-400", "Pioneer DDJ-400", Src::Mixxx, true, true) },
         Profile { init: Some(&[0xf0, 0x00, 0x40, 0x05, 0x00, 0x00, 0x02, 0x0a, 0x00, 0x03, 0x01, 0xf7]), ..p("ddj-200", "Pioneer DDJ-200", Src::Mixxx, false, true) },
         Profile { init: Some(&[0xf0, 0x00, 0x20, 0x7f, 0x03, 0x01, 0xf7]), ..p("ddj-sb3", "Pioneer DDJ-SB3", Src::Mixxx, false, true) },
