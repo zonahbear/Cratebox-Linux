@@ -73,6 +73,15 @@ install -m 0755 "$here/chroot-setup.sh" "$stage/"
 cp "$work/minimal.manifest.full.orig" "$work/minimal.standard.manifest.full.orig" "$stage/"
 cp "$S/var/lib/dpkg/status" "$work/standard.status.orig"
 chroot_layer "$S" "$M" /tmp/cratebox-os/chroot-setup.sh
+# The installer (Calamares unpackfs) rsyncs minimal, then minimal.standard, onto the disk. Where this
+# layer removed a whole directory, overlayfs left a whiteout (a 0,0 character device) over a directory of
+# the layer below, and rsync can't replace a non-empty directory with it: "Failed to unpack" (Jonah,
+# 2026-10-26). An empty directory in its place copies fine; what's in it below stays, harmlessly.
+find "$S" -type c | while read -r w; do
+    if [ -d "$M/${w#"$S"/}" ] && [ "$(stat -c %t,%T "$w")" = 0,0 ]; then
+        rm "$w" && mkdir "$w" && echo "whiteout over a directory replaced: ${w#"$S"}"
+    fi
+done
 "$here/merge-dpkg-status.py" "$work/standard.status.orig" "$S/var/lib/dpkg/status" "$L/var/lib/dpkg/status" "$work/live.status"
 cp "$work/live.status" "$L/var/lib/dpkg/status"
 
