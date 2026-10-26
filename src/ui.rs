@@ -287,7 +287,6 @@ impl Gui {
     /// two decks, XDJ style: tempo fader on the outside edge; a screen (platter, time, key, BPM, beat counter);
     /// SYNC MT Q TAP GRID; wide CUE and PLAY; the loop row; the pad-mode tabs and two rows of pads
     fn deck_tall(&mut self, ui: &mut Ui, i: usize, inner: Rect) {
-        let col = deck_color(i);
         let h = inner.height();
         let (rh, font) = (24.0, 11.5);
         let tempo_w = 24.0;
@@ -303,6 +302,22 @@ impl Gui {
         let screen = Rect::from_min_size(area.min, vec2(w, screen_h));
         self.deck_screen(ui, i, screen, outer_left);
         let r_ctl = Rect::from_min_size(pos2(area.left(), screen.bottom() + GAP), vec2(w, rh));
+        self.ctl_row(ui, i, r_ctl, rh, font);
+        // CUE and PLAY side by side, full width (the play side towards the mixer, like a CDJ's)
+        let r_cp = Rect::from_min_size(pos2(area.left(), r_ctl.bottom() + GAP), vec2(w, cb));
+        let half = (w - GAP) / 2.0;
+        let cue_r = Rect::from_min_size(r_cp.min, vec2(half, cb));
+        let play_r = Rect::from_min_size(pos2(r_cp.left() + half + GAP, r_cp.top()), vec2(half, cb));
+        self.cue_play(ui, i, cue_r, play_r, cb);
+        let r_loop = Rect::from_min_size(pos2(area.left(), r_cp.bottom() + GAP), vec2(w, rh));
+        self.loop_row(ui, i, r_loop, rh, font);
+        let rest = Rect::from_min_max(pos2(area.left(), r_loop.bottom() + GAP), area.max);
+        self.pads(ui, i, rest, rh, font);
+    }
+
+    /// SYNC MT Q TAP GRID and the loop length, in one row
+    fn ctl_row(&mut self, ui: &mut Ui, i: usize, r_ctl: Rect, rh: f32, font: f32) {
+        let (col, w) = (deck_color(i), r_ctl.width());
         {
             let ui = &mut row_ui(ui, r_ctl);
             let d = &self.app.decks[i];
@@ -320,16 +335,6 @@ impl Gui {
             if r.clicked() { self.app.ui.grid_open[i] = !g; }
             self.loop_len(ui, i, vec2(u, rh), font);
         }
-        // CUE and PLAY side by side, full width (the play side towards the mixer, like a CDJ's)
-        let r_cp = Rect::from_min_size(pos2(area.left(), r_ctl.bottom() + GAP), vec2(w, cb));
-        let half = (w - GAP) / 2.0;
-        let cue_r = Rect::from_min_size(r_cp.min, vec2(half, cb));
-        let play_r = Rect::from_min_size(pos2(r_cp.left() + half + GAP, r_cp.top()), vec2(half, cb));
-        self.cue_play(ui, i, cue_r, play_r, cb);
-        let r_loop = Rect::from_min_size(pos2(area.left(), r_cp.bottom() + GAP), vec2(w, rh));
-        self.loop_row(ui, i, r_loop, rh, font);
-        let rest = Rect::from_min_max(pos2(area.left(), r_loop.bottom() + GAP), area.max);
-        self.pads(ui, i, rest, rh, font);
     }
 
     /// on-screen buttons or only screens: Settings → Decks (auto = screens while a controller is connected)
@@ -343,9 +348,22 @@ impl Gui {
         let col = deck_color(i);
         let rh = if inner.height() > 200.0 { 24.0 } else { 18.0 };
         let font = if rh > 20.0 { 11.5 } else { 10.0 };
-        let screen = Rect::from_min_max(inner.min, pos2(inner.right(), inner.bottom() - 2.0 * rh - 2.0 * GAP));
+        // two decks: room for a SYNC / Q / GRID row; the grid editor takes the hot cue row while it's open
+        let tall = inner.height() > 200.0;
+        let rows = if tall { 3.0 } else { 2.0 };
+        let screen = Rect::from_min_max(inner.min, pos2(inner.right(), inner.bottom() - rows * (rh + GAP)));
         self.deck_screen(ui, i, screen, i % 2 == 0);
-        let r_hot = Rect::from_min_size(pos2(inner.left(), screen.bottom() + GAP), vec2(inner.width(), rh));
+        let mut y = screen.bottom() + GAP;
+        if tall {
+            self.ctl_row(ui, i, Rect::from_min_size(pos2(inner.left(), y), vec2(inner.width(), rh)), rh, font);
+            y += rh + GAP;
+        }
+        let r_hot = Rect::from_min_size(pos2(inner.left(), y), vec2(inner.width(), rh));
+        if self.app.ui.grid_open[i] {
+            // the editor's buttons wrap onto two rows: it takes the status line too
+            self.grid_bar(ui, i, Rect::from_min_size(r_hot.min, vec2(inner.width(), 2.0 * rh + GAP)), rh, font);
+            return;
+        }
         {
             let ui = &mut row_ui(ui, r_hot);
             let u = (inner.width() - 7.0 * GAP) / 8.0;
@@ -420,8 +438,21 @@ impl Gui {
             p.galley(pos2(fx, y2), g, c);
             fx += gw + 6.0;
         }
-        // bottom line: beat dots, bar.beat, phrase
         let y3 = text.bottom() - small;
+        // the space between (big on two decks): title and artist, then the whole track's waveform
+        let mid = Rect::from_min_max(pos2(c0, y2 + small + 8.0), pos2(c2, y3 - 6.0));
+        if loaded && mid.height() >= 26.0 {
+            let (title, artist) = d.track.as_ref().map(|t| (t.title.clone(), t.artist.clone())).unwrap_or_default();
+            p.text(mid.left_top(), egui::Align2::LEFT_TOP, title, bold(small + 1.0), FG);
+            let mut top = mid.top() + small + 4.0;
+            if !artist.is_empty() && mid.height() >= 60.0 {
+                p.text(pos2(mid.left(), top), egui::Align2::LEFT_TOP, artist, prop(small), MUTED);
+                top += small + 4.0;
+            }
+            let ov = Rect::from_min_max(pos2(mid.left(), top + 2.0), pos2(mid.right(), mid.bottom().min(top + 2.0 + 56.0)));
+            if ov.height() >= 12.0 { paint_overview(&p, ov, d, self.app.store.settings.wave_style == "rgb"); }
+        }
+        // bottom line: beat dots, bar.beat, phrase
         if loaded && d.ana.is_some() && y3 > y2 + small + 2.0 {
             let b = d.beat_at(t).floor();
             let beat = b.rem_euclid(4.0) as i32;
