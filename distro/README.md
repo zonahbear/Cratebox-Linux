@@ -68,7 +68,7 @@ From Linux there is an untested fallback:
 
 | Change | Why |
 |---|---|
-| Cratebox's audio thread asks for **realtime priority** (cpal `audio_thread_priority`, through rtkit) | Before this it ran at normal priority, so a busy UI or analysis thread could delay it |
+| Cratebox's audio thread runs **realtime** (SCHED_FIFO 70, under PipeWire's own threads). Login users join the `cratebox-rt` group at boot, which `/etc/security/limits.d/30-cratebox-rt.conf` allows rtprio 70. No CPU time limit is set, so an overloaded moment can stutter but can't kill Cratebox | Otherwise a busy UI or analysis thread could delay it. PipeWire's own setup is untouched |
 | Cratebox buffer **512 frames** for new users (about 10 ms per period at 48 kHz). Settings → Sound changes it | The default 256 is tight for a 4.5 W fanless Core m |
 | PipeWire `default.clock.min-quantum = 256` | Stops apps such as Chrome pulling the graph below 5 ms |
 | `preempt=full` | The generic kernel is PREEMPT_DYNAMIC; full preemption gives the audio threads steadier scheduling |
@@ -86,6 +86,7 @@ cat /sys/power/mem_sleep                                   # [s2idle] deep
 cat /sys/bus/pci/devices/0000:01:00.0/d3cold_allowed       # 0
 modinfo -n snd_hda_codec_cs420x                            # .../updates/dkms/...
 amixer -c 0 get Master                                     # 100%, and stays there while you move the volume
+ps -eLo cls,rtprio,pid,comm | grep -w FF                    # with Cratebox open: one of its threads at 70
 ```
 
 Then play through the speakers after a **warm reboot** and after a **cold boot**, test headphones

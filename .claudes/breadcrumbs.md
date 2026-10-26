@@ -23,3 +23,12 @@
 - Brief rules in overlay/: s2idle, NVMe d3cold udev, any-user PipeWire resume hook, WP 0.5 soft-mixer,
   Master+PCM 100% service. Anti-dropout (proposed): cpal audio_thread_priority (needs libdbus-1-dev),
   512-frame default via /etc/skel, PipeWire min-quantum 256, preempt=full, performance profile in kiosk.
+
+## 2026-10-26 (later still): realtime audio thread fix
+
+- QEMU boot of the test ISO: Cratebox died with "CPU time limit exceeded". cpal's `audio_thread_priority`
+  (rtkit) sets RLIMIT_RTTIME soft = budget, so an overrunning callback gets SIGXCPU and the whole app dies.
+- Fix: feature dropped (no more libdbus); `promote_to_realtime` in src/audio_io.rs sets SCHED_FIFO 70 on the
+  first callback, no RTTIME, warns once if it can't. Distro: group cratebox-rt, limits.d rtprio 70,
+  cratebox-rt-users.service adds UID 1000-59999 users before the display manager (live user from casper too;
+  the live layer has no /etc/group of its own, so the standard layer's group applies). PipeWire untouched.

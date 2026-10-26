@@ -73,12 +73,27 @@ fn build<T>(dev: &cpal::Device, cfg: &StreamConfig, mut fill: impl FnMut(&mut [f
 where T: cpal::SizedSample + cpal::FromSample<f32> {
     let mut scratch: Vec<f32> = Vec::with_capacity(16384);
     let e2 = err.clone();
+    let mut promoted = false;
     dev.build_output_stream::<T, _, _>(cfg, move |data: &mut [T], _| {
+        if !promoted { promoted = true; promote_to_realtime(); }
         if scratch.len() < data.len() { scratch.resize(data.len(), 0.0); }
         let s = &mut scratch[..data.len()];
         fill(s);
         for (o, v) in data.iter_mut().zip(s.iter()) { *o = T::from_sample(*v); }
     }, move |e| { if let Ok(mut x) = e2.lock() { *x = Some(e.to_string()); } }, None).map_err(|e| e.to_string())
+}
+
+/// Puts the calling (audio callback) thread on SCHED_FIFO, so a busy UI or analysis thread can't delay
+/// it. Needs an rtprio limit (Cratebox OS grants one); without it the thread stays at normal priority.
+/// No RLIMIT_RTTIME is set (rtkit needs one, and the kernel kills the whole app with SIGXCPU when an
+/// overloaded callback goes over it); the kernel's RT throttling still keeps the system usable.
+fn promote_to_realtime() {
+    static WARNED: AtomicBool = AtomicBool::new(false);
+    let param = libc::sched_param { sched_priority: 70 };
+    let rc = unsafe { libc::pthread_setschedparam(libc::pthread_self(), libc::SCHED_FIFO, &param) };
+    if rc != 0 && !WARNED.swap(true, Ordering::Relaxed) {
+        eprintln!("cratebox: no realtime priority for the audio thread ({}), running at normal priority", std::io::Error::from_raw_os_error(rc));
+    }
 }
 
 fn open_stream(dev: &cpal::Device, cfg: &StreamConfig, fmt: SampleFormat, fill: impl FnMut(&mut [f32]) + Send + 'static, err: Arc<Mutex<Option<String>>>) -> Result<cpal::Stream, String> {

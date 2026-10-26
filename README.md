@@ -16,7 +16,7 @@ cd cratebox-0.1.0-linux-x86_64-v3
 
 That puts `cratebox` in `~/.local/bin` and Cratebox in your app menu; no root needed. `./install.sh --remove` takes it out again (your library data stays).
 
-Needs: an x86-64-v3 CPU, glibc 2.30 or newer (Ubuntu 20.04+, Debian 11+, Fedora 32+, Arch, Mint 20+...), ALSA (`libasound2`) and D-Bus (`libdbus-1-3`), both on every desktop distro, and OpenGL (any graphics driver from the last decade). Works on X11 and Wayland.
+Needs: an x86-64-v3 CPU, glibc 2.30 or newer (Ubuntu 20.04+, Debian 11+, Fedora 32+, Arch, Mint 20+...), ALSA (`libasound2`, on every desktop distro) and OpenGL (any graphics driver from the last decade). Works on X11 and Wayland.
 
 ## First run
 
@@ -34,7 +34,7 @@ The FLX4's sound card has four outputs: 1–2 go to the speakers (MASTER), 3–4
 - **If that device is busy:** PipeWire or PulseAudio is holding the FLX4. Either set the FLX4's profile to *Off* in your sound settings (pavucontrol → Configuration, or GNOME/KDE sound settings) so Cratebox can have it, or set it to *Pro Audio* and pick it through the `pipewire` device.
 - **No FLX4 sound card?** Use **Split** (master in the left ear, cue in the right, with a splitter cable) or **Another device** (headphones on a second sound card).
 - **Test cue** in the header beeps in the headphone mix only: if you hear it on the speakers, cueing isn't separated yet.
-- **Realtime:** the audio thread asks for realtime priority (through rtkit, which desktop distros run for PipeWire), so the sound keeps going while the window or the analysis is busy. If rtkit isn't there it says so on the terminal and runs at normal priority.
+- **Realtime:** the audio thread asks for realtime priority (SCHED_FIFO 70), so the sound keeps going while the window or the analysis is busy. That needs an rtprio limit of 70 or more for your user (Cratebox OS sets one; elsewhere add e.g. `@audio - rtprio 70` to `/etc/security/limits.d/` and log in again). Without it Cratebox says so on the terminal and runs at normal priority.
 - **Audio buffer** (Settings → Sound): 256 samples (about 5 ms) is the default. Go lower for a tighter jog feel, higher if you hear crackles.
 
 If no sound card can be opened, Cratebox keeps running silently (the decks still move) and tells you in the status line.
@@ -105,8 +105,8 @@ The tree on the left: **Collection**, your **Playlists**, and rekordbox **Device
 ## Build from source
 
 ```sh
-# Debian/Ubuntu: sudo apt install build-essential pkg-config libasound2-dev libdbus-1-dev
-# Fedora: sudo dnf install gcc pkgconf alsa-lib-devel dbus-devel      Arch: sudo pacman -S base-devel alsa-lib dbus
+# Debian/Ubuntu: sudo apt install build-essential pkg-config libasound2-dev
+# Fedora: sudo dnf install gcc pkgconf alsa-lib-devel      Arch: sudo pacman -S base-devel alsa-lib
 cargo build --release          # x86-64-v3, set in .cargo/config.toml
 ./target/x86_64-unknown-linux-gnu/release/cratebox
 ```

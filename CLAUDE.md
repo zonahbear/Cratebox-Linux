@@ -52,8 +52,9 @@ distro/            Cratebox OS ISO: build-iso.sh remasters Lubuntu 26.04.1 (laye
 
 ## Build and test
 
-- Needs ALSA and D-Bus dev files: `apt install build-essential pkg-config libasound2-dev libdbus-1-dev` (plus `xvfb`
-  for tests/ui.rs). D-Bus is for cpal's `audio_thread_priority` (realtime audio thread via rtkit).
+- Needs ALSA dev files: `apt install build-essential pkg-config libasound2-dev` (plus `xvfb` for tests/ui.rs).
+- Realtime audio: `promote_to_realtime` in src/audio_io.rs (direct SCHED_FIFO, needs rtprio). Don't go back to cpal's
+  `audio_thread_priority`: it sets RLIMIT_RTTIME, and SIGXCPU killed Cratebox when the callback overran.
   In a cloud session, install those first; don't rely on `env.sh` (its shim path won't exist).
 - `cargo build --release` (x86-64-v3 via `.cargo/config.toml`, target `x86_64-unknown-linux-gnu`, so the binary
   is at `target/x86_64-unknown-linux-gnu/release/cratebox`). Older CPU: `--config 'build.rustflags=[]'`.

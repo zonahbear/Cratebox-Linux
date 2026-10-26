@@ -1,0 +1,6 @@
+#!/bin/sh
+# Puts every login user (UID 1000-59999: the live user casper made, or the one the installer made)
+# in cratebox-rt, before the display manager starts, so pam_limits grants the audio thread rtprio.
+getent passwd | awk -F: '$3 >= 1000 && $3 < 60000 { print $1 }' | while read -r u; do
+    id -nG "$u" | tr ' ' '\n' | grep -qx cratebox-rt || usermod -aG cratebox-rt "$u"
+done
