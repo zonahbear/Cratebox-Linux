@@ -57,3 +57,6 @@
   are the iOS deck (jog + cluster, tall/compact variants in ui.rs), library height + playlist column drag
   (settings lib_h/tree_w), keyboard+trackpad (faders grab-and-slide, scroll nudges, docs/keyboard.md),
   FLX4 sends the Mixxx position query (= keep-alive) at connect.
+
+## 2026-10-26 19:20Z
+- PR #7 merged (c53e7bc); cratebox-os run 6 rebuilt kiosk-latest with the 4-deck app. Next: Jonah tests on the MacBook (FLX4, trackpad scroll sign, HEAT over BlueZ).
