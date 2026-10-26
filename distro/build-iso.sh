@@ -1,7 +1,7 @@
 #!/bin/bash
 # Builds Cratebox OS by remastering the official Lubuntu 26.04 desktop ISO.
 #   sudo distro/build-iso.sh LUBUNTU.iso CRATEBOX_BINARY OUT.iso
-# Needs: squashfs-tools xorriso git curl, root (overlay mounts + chroot), ~25 GB free, network.
+# Needs: squashfs-tools xorriso cpio git curl, root (overlay mounts + chroot), ~25 GB free, network.
 # SKIP_THIRD_PARTY=1 leaves out the out-of-tree speaker driver and Chrome (a quick check of the
 # remaster itself; that image has no MacBook speakers).
 #
@@ -70,6 +70,7 @@ if [ -z "${SKIP_THIRD_PARTY:-}" ]; then
     git -C "$stage/macbook12-audio-driver" checkout -q "$audio_driver_commit"
 fi
 install -m 0755 "$here/chroot-setup.sh" "$stage/"
+cp "$work/minimal.manifest.full.orig" "$work/minimal.standard.manifest.full.orig" "$stage/"
 cp "$S/var/lib/dpkg/status" "$work/standard.status.orig"
 chroot_layer "$S" "$M" /tmp/cratebox-os/chroot-setup.sh
 "$here/merge-dpkg-status.py" "$work/standard.status.orig" "$S/var/lib/dpkg/status" "$L/var/lib/dpkg/status" "$work/live.status"
@@ -92,12 +93,26 @@ diff -u --label minimal.manifest.full "$work/minimal.manifest.full.orig" \
 diff -u --label minimal.standard.manifest.full "$work/minimal.standard.manifest.full" \
     --label minimal.standard.live.manifest.full "$work/minimal.standard.live.manifest.full" > "$work/iso/casper/minimal.standard.live.manifest" || true
 
-# boot menu: Cratebox names, and the same kernel options as the installed system
-sed -e 's/Try or Install Lubuntu/Cratebox OS (try or install)/' -e 's/Lubuntu (safe graphics)/Cratebox OS (safe graphics)/' \
-    -e 's|\(/casper/vmlinuz.*\) ---|\1 mem_sleep_default=s2idle preempt=full ---|' "$work/grub.cfg" > "$work/iso/boot/grub/grub.cfg"
+# live boot splash: the casper initrd stays as shipped, with one more (uncompressed) cpio after it
+# carrying the Cratebox theme and a plymouthd.conf that picks it; later archives overwrite files.
+# The kernel only reads an archive that starts on a 4-byte boundary, hence the padding.
+xorriso -osirrox on -indev "$iso" -extract /casper/initrd "$work/initrd.orig"
+mkdir -p "$work/splash/etc/plymouth" "$work/splash/usr/share/plymouth/themes"
+cp -a "$S/usr/share/plymouth/themes/cratebox" "$work/splash/usr/share/plymouth/themes/"
+cp "$S/etc/plymouth/plymouthd.conf" "$work/splash/etc/plymouth/"
+{
+    cat "$work/initrd.orig"
+    head -c $(( (4 - $(stat -c %s "$work/initrd.orig") % 4) % 4 )) /dev/zero
+    (cd "$work/splash" && find . | LC_ALL=C sort | cpio -o -H newc -R 0:0 --quiet)
+} > "$work/iso/casper/initrd"
+
+# boot menu: Cratebox names, 3 s instead of 30 before it boots, and the same kernel options as the
+# installed system
+sed -e 's/^set timeout=30$/set timeout=3/' -e 's/Try or Install Lubuntu/Cratebox OS (try or install)/' -e 's/Lubuntu (safe graphics)/Cratebox OS (safe graphics)/' \
+    -e 's|\(/casper/vmlinuz.*\) ---|\1 mem_sleep_default=s2idle preempt=full threadirqs nowatchdog ---|' "$work/grub.cfg" > "$work/iso/boot/grub/grub.cfg"
 
 echo "== repack"
-changed=(boot/grub/grub.cfg)
+changed=(boot/grub/grub.cfg casper/initrd)
 for l in minimal.standard minimal.standard.live; do
     changed+=("casper/$l.squashfs" "casper/$l.size" "casper/$l.manifest" "casper/$l.manifest.full")
 done
