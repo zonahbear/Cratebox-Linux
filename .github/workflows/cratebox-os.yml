@@ -45,6 +45,7 @@ jobs:
       - name: Publish to the kiosk-latest release
         env:
           GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}   # gh runs outside the checkout here
         run: |
           cd /mnt/work/out
           sudo chown -R "$USER" .   # build-iso.sh (run as root) made this folder
