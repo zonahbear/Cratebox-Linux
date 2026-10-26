@@ -56,7 +56,8 @@ install -Dm 0644 "$src/cratebox.desktop" /usr/share/applications/cratebox.deskto
 install -Dm 0644 "$src/cratebox.png" /usr/share/icons/hicolor/512x512/apps/cratebox.png
 gtk-update-icon-cache -q /usr/share/icons/hicolor || true
 cp -a "$src"/overlay/. /
-systemctl enable macbook12-audio-amps.service
+groupadd -r -f cratebox-rt
+systemctl enable macbook12-audio-amps.service cratebox-rt-users.service
 
 # The brief's hard rules, checked rather than trusted: the audio stack is all there, nothing that
 # switches on HDA power saving, no debug modprobe file
@@ -65,5 +66,6 @@ fail() { echo "$1" >&2; exit 1; }
 if dpkg-query -W -f '${Status}\n' tlp 2>/dev/null | grep -q 'install ok installed'; then fail "tlp is installed"; fi
 if grep -rqs 'power_save' /etc/modprobe.d/ /usr/lib/modprobe.d/; then fail "a modprobe file sets power_save"; fi
 if [ -e /etc/modprobe.d/99-macbook12-audio-diagnostic.conf ]; then fail "the audio debug modprobe file is there"; fi
+if ldd /usr/bin/cratebox | grep -q "not found"; then fail "cratebox is missing a library"; fi
 
 apt-get clean

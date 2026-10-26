@@ -1,0 +1,11 @@
+[Unit]
+Description=Cratebox OS: realtime audio group for login users
+After=systemd-user-sessions.service
+Before=display-manager.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/libexec/cratebox-rt-users
+
+[Install]
+WantedBy=multi-user.target
