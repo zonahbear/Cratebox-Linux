@@ -103,7 +103,7 @@ systemctl disable NetworkManager-wait-online.service systemd-networkd-wait-onlin
 # hand), no printer or modem daemons, no crash reporters (proposed)
 for u in apt-daily.timer apt-daily-upgrade.timer cups.service cups-browsed.service ModemManager.service \
          kerneloops.service whoopsie.service apport.service; do
-    if systemctl cat "$u" >/dev/null 2>&1; then systemctl disable "$u"; fi
+    systemctl disable "$u" 2>/dev/null || true    # some exist only as stubs (kerneloops on the runner)
 done
 
 # "Minimal installation" (cratebox-minimal-install): the stock full-minus-minimal packages, without
