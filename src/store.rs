@@ -16,7 +16,19 @@ pub struct Settings {
     pub bpm_range: usize,
     pub wave_style: String,
     pub spin: f64,
-    pub mt: [bool; 2],
+    /// master tempo per deck (a list, so older two-deck settings files still load)
+    pub mt: Vec<bool>,
+    /// 4-deck mode
+    pub four: bool,
+    /// WAVE mode: just the waveforms (and the library)
+    pub wave: bool,
+    /// the BEAT FX unit: effect, LEVEL/DEPTH, channel (0-3, 4 = master) and the BEAT picked for each effect
+    pub bfx_fx: String,
+    pub bfx_depth: f64,
+    pub bfx_ch: usize,
+    pub bfx_beats: HashMap<String, f64>,
+    /// where REC saves (empty: ~/Music/Cratebox Recordings)
+    pub rec_dir: String,
     pub zoom: f64,
     pub browse: bool,
     pub out_device: String,
@@ -37,7 +49,8 @@ pub struct Settings {
 impl Default for Settings {
     fn default() -> Self {
         Settings {
-            folders: vec![], devices: vec![], bpm_range: 3, wave_style: "rgb".into(), spin: 2.5, mt: [true, true], zoom: 8.0, browse: false,
+            folders: vec![], devices: vec![], bpm_range: 3, wave_style: "rgb".into(), spin: 2.5, mt: vec![true; 4], four: false, wave: false,
+            bfx_fx: "ECHO".into(), bfx_depth: 0.55, bfx_ch: 0, bfx_beats: HashMap::new(), rec_dir: String::new(), zoom: 8.0, browse: false,
             out_device: String::new(), hp_mode: "auto".into(), hp_device: String::new(), midi_in: String::new(), profile_for: HashMap::new(),
             learned: HashMap::new(), base_path: String::new(), pl_open: vec![], bad: vec![], buffer: 256,
         }

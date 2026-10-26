@@ -1,8 +1,10 @@
-//! The audio engine: two deck players into the mixer, rendered into whatever the output device wants.
+//! The audio engine: four deck players into the mixer (3 and 4 sound only in 4-deck mode), Beat FX on
+//! the master, rendered into whatever the output device wants.
 //! Commands come in over a channel; the state the UI needs goes out through a shared snapshot that
 //! the audio thread only ever try-locks (it never waits).
 
-use crate::mixer::{Limiter, MixerParams, Route, Smooth, Strip};
+use crate::fx::{FxClock, FxUnit, SlotSet};
+use crate::mixer::{head_mix, Limiter, MixerParams, Route, Smooth, Strip, DECKS};
 use crate::player::{Pcm, Player, PlayerCmd, Report};
 use std::sync::mpsc::{Receiver, Sender};
 use std::sync::{Arc, Mutex};
@@ -14,14 +16,26 @@ pub enum Cmd {
     Route(Route),
     /// three short beeps in the headphone mix only
     TestCue,
+    /// set an FX slot on a unit (0-3 = the deck channels, 4 = master); `pad` picks the PAD FX slot
+    Fx { unit: usize, pad: bool, set: SlotSet },
+    Clock { unit: usize, clock: FxClock },
+    /// PUFF (HEAT): how hard the Puffco is being hit, 0..1, for that unit's BEAT FX slot
+    FxMod { unit: usize, v: f64 },
+    /// the master (post-limiter) goes here as interleaved stereo while recording
+    Record(Option<crate::ring::Producer>),
 }
+
+/// unit number of the master insert
+pub const MASTER_FX: usize = DECKS;
 
 #[derive(Clone, Copy, Debug)]
 pub struct Status {
-    pub decks: [Report; 2],
+    pub decks: [Report; DECKS],
     /// when this snapshot was taken (end of the block just rendered)
     pub at: Instant,
-    pub meters: [f32; 2],
+    /// the audio clock (seconds of output rendered) at `at`
+    pub time: f64,
+    pub meters: [f32; DECKS],
     pub master_meter: [f32; 2],
     pub sample_rate: f64,
     pub channels: usize,
@@ -29,19 +43,23 @@ pub struct Status {
 }
 
 impl Default for Status {
-    fn default() -> Self { Status { decks: [Report::default(); 2], at: Instant::now(), meters: [0.0; 2], master_meter: [0.0; 2], sample_rate: 48000.0, channels: 2, blocks: 0 } }
+    fn default() -> Self { Status { decks: [Report::default(); DECKS], at: Instant::now(), time: 0.0, meters: [0.0; DECKS], master_meter: [0.0; 2], sample_rate: 48000.0, channels: 2, blocks: 0 } }
 }
 
 pub type Shared = Arc<Mutex<Status>>;
 
 pub struct Engine {
     pub sr: f64,
-    pub players: [Player; 2],
-    strips: [Strip; 2],
+    pub players: [Player; DECKS],
+    strips: [Strip; DECKS],
+    master_fx: FxUnit,
     params: MixerParams,
     master_level: Smooth,
     hp_cue: Smooth,
     hp_master: Smooth,
+    master_cue: Smooth,
+    frames: u64,
+    rec: Option<crate::ring::Producer>,
     limiter: Limiter,
     pub route: Route,
     rx: Receiver<Cmd>,
@@ -51,7 +69,7 @@ pub struct Engine {
     beep_t: usize,
     // scratch buffers
     buf: Vec<Vec<f32>>,
-    meter_hold: [f32; 2],
+    meter_hold: [f32; DECKS],
     mm_hold: [f32; 2],
     blocks: u64,
     /// headphone feed for a second output device (cue mix, interleaved stereo)
@@ -64,21 +82,22 @@ impl Engine {
     pub fn new(sr: f64, rx: Receiver<Cmd>, trash: Sender<Pcm>, shared: Shared) -> Engine {
         let p = MixerParams::default();
         let mut e = Engine {
-            sr, players: [Player::new(sr), Player::new(sr)], strips: [Strip::new(sr), Strip::new(sr)], params: p,
-            master_level: Smooth::new(master_level_gain(p.master as f64), sr), hp_cue: Smooth::new(0.0, sr), hp_master: Smooth::new(0.0, sr),
-            limiter: Limiter::new(sr), route: Route::Master, rx, trash, shared, beep_left: 0, beep_t: 0,
-            buf: vec![vec![0.0; 4096]; 8], meter_hold: [0.0; 2], mm_hold: [0.0; 2], blocks: 0, hp_tap: None,
+            sr, players: std::array::from_fn(|_| Player::new(sr)), strips: std::array::from_fn(|_| Strip::new(sr)), master_fx: FxUnit::new(sr), params: p,
+            master_level: Smooth::new(master_level_gain(p.master as f64), sr), hp_cue: Smooth::new(0.0, sr), hp_master: Smooth::new(0.0, sr), master_cue: Smooth::new(0.0, sr),
+            frames: 0, rec: None, limiter: Limiter::new(sr), route: Route::Master, rx, trash, shared, beep_left: 0, beep_t: 0,
+            buf: vec![vec![0.0; 4096]; 6], meter_hold: [0.0; DECKS], mm_hold: [0.0; 2], blocks: 0, hp_tap: None,
         };
         e.apply(p);
         e
     }
     fn apply(&mut self, p: MixerParams) {
         self.params = p;
-        self.strips[0].set(&p, 0);
-        self.strips[1].set(&p, 1);
+        for (i, s) in self.strips.iter_mut().enumerate() { s.set(&p, i); }
         self.master_level.target = master_level_gain(p.master as f64);
-        self.hp_cue.target = (p.head_mix as f64 * std::f64::consts::FRAC_PI_2).cos();
-        self.hp_master.target = (p.head_mix as f64 * std::f64::consts::FRAC_PI_2).sin();
+        let (c, m) = head_mix(p.head_mix as f64);
+        self.hp_cue.target = c;
+        self.hp_master.target = m;
+        self.master_cue.target = if p.master_cue { 1.0 } else { 0.0 };
     }
     fn drain(&mut self) {
         while let Ok(c) = self.rx.try_recv() {
@@ -87,12 +106,19 @@ impl Engine {
                 Cmd::Mixer(p) => self.apply(p),
                 Cmd::Route(r) => self.route = r,
                 Cmd::TestCue => { self.beep_left = (0.9 * self.sr) as usize; self.beep_t = 0; }
+                Cmd::Fx { unit, pad, set } => { let u = self.fx_unit(unit); if pad { u.pad.set(set) } else { u.beat.set(set) } }
+                Cmd::Clock { unit, clock } => self.fx_unit(unit).clock = clock,
+                Cmd::FxMod { unit, v } => self.fx_unit(unit).beat.set_mod(v),
+                // (the recorder thread holds the other end for a while after it stops, so this never frees)
+                Cmd::Record(r) => self.rec = r,
             }
         }
         for p in self.players.iter_mut() {
             for x in p.trash.drain(..) { let _ = self.trash.send(x); }
         }
     }
+
+    fn fx_unit(&mut self, u: usize) -> &mut FxUnit { if u < DECKS { &mut self.strips[u].fx } else { &mut self.master_fx } }
 
     /// fill an interleaved output buffer of `channels` channels
     pub fn render(&mut self, out: &mut [f32], channels: usize) {
@@ -107,16 +133,19 @@ impl Engine {
 
     fn render_block(&mut self, out: &mut [f32], channels: usize, n: usize) {
         self.drain();
-        let [d0l, d0r, d1l, d1r, ml, mr, cl, cr] = &mut self.buf[..] else { unreachable!() };
+        let time = self.frames as f64 / self.sr;
+        let [dl, dr, ml, mr, cl, cr] = &mut self.buf[..] else { unreachable!() };
         for b in [&mut *ml, &mut *mr, &mut *cl, &mut *cr] { b[..n].fill(0.0); }
-        self.players[0].process(&mut d0l[..n], &mut d0r[..n]);
-        self.players[1].process(&mut d1l[..n], &mut d1r[..n]);
-        self.strips[0].process(&d0l[..n], &d0r[..n], &mut ml[..n], &mut mr[..n], &mut cl[..n], &mut cr[..n]);
-        self.strips[1].process(&d1l[..n], &d1r[..n], &mut ml[..n], &mut mr[..n], &mut cl[..n], &mut cr[..n]);
+        for i in 0..DECKS {
+            // a hidden deck (3/4 outside 4-deck mode) is silent; it's stopped when hidden, so this costs nothing
+            self.players[i].process(&mut dl[..n], &mut dr[..n]);
+            self.strips[i].process(&mut dl[..n], &mut dr[..n], &mut ml[..n], &mut mr[..n], &mut cl[..n], &mut cr[..n], time);
+        }
+        if self.master_fx.active() { self.master_fx.process(&mut ml[..n], &mut mr[..n], time); } else { self.master_fx.idle(n); }
         let mut mpk = [0f32; 2];
         for k in 0..n {
             let g = self.master_level.next();
-            let (hc, hm) = (self.hp_cue.next(), self.hp_master.next());
+            let (hc, hm) = (self.hp_cue.next(), self.hp_master.next() + self.master_cue.next());
             let (l, r) = (ml[k] as f64 * g, mr[k] as f64 * g);
             // headphones: blend of the cue bus and the master (before the limiter, like the web version)
             let mut beep = 0.0;
@@ -146,16 +175,21 @@ impl Engine {
         if let Some(tap) = self.hp_tap.as_mut() {
             for k in 0..n { tap.push2(cl[k], cr[k]); }
         }
+        if let Some(rec) = self.rec.as_mut() {
+            for k in 0..n { rec.push2(ml[k], mr[k]); }
+        }
         self.blocks += 1;
+        self.frames += n as u64;
         // meters: peak with a short hold/decay
-        for i in 0..2 {
+        for i in 0..DECKS {
             let p = self.strips[i].peak;
             self.meter_hold[i] = if p > self.meter_hold[i] { p } else { self.meter_hold[i] * 0.85 };
-            self.mm_hold[i] = if mpk[i] > self.mm_hold[i] { mpk[i] } else { self.mm_hold[i] * 0.85 };
         }
+        for i in 0..2 { self.mm_hold[i] = if mpk[i] > self.mm_hold[i] { mpk[i] } else { self.mm_hold[i] * 0.85 }; }
         if let Ok(mut s) = self.shared.try_lock() {
-            s.decks = [self.players[0].report(), self.players[1].report()];
+            s.decks = std::array::from_fn(|i| self.players[i].report());
             s.at = Instant::now();
+            s.time = self.frames as f64 / self.sr;
             s.meters = self.meter_hold;
             s.master_meter = self.mm_hold;
             s.sample_rate = self.sr;
@@ -186,7 +220,7 @@ mod tests {
         let b = tone(sr, 3.0, 880.0);
         tx.send(Cmd::Deck(0, PlayerCmd::Load { l: a.clone(), r: a, mt: false, spin: 2.5 })).unwrap();
         tx.send(Cmd::Deck(1, PlayerCmd::Load { l: b.clone(), r: b, mt: false, spin: 2.5 })).unwrap();
-        let p = MixerParams { fader: [1.0, 0.0], pfl: [false, true], head_mix: 0.0, ..Default::default() };
+        let p = MixerParams { fader: [1.0, 0.0, 0.0, 0.0], pfl: [false, true, false, false], head_mix: 0.0, ..Default::default() };
         tx.send(Cmd::Mixer(p)).unwrap();
         tx.send(Cmd::Route(Route::Quad)).unwrap();
         tx.send(Cmd::Deck(0, PlayerCmd::Play(true))).unwrap();
@@ -208,7 +242,7 @@ mod tests {
         let mut e = Engine::new(sr, rx, ttx, Arc::new(Mutex::new(Status::default())));
         let a: Pcm = Arc::new(vec![0.99f32; 96000].iter().enumerate().map(|(i, v)| if i % 2 == 0 { *v } else { -*v }).collect());
         tx.send(Cmd::Deck(0, PlayerCmd::Load { l: a.clone(), r: a, mt: false, spin: 2.5 })).unwrap();
-        tx.send(Cmd::Mixer(MixerParams { fader: [1.0; 2], master: 1.0, trim: [1.0; 2], ..Default::default() })).unwrap();
+        tx.send(Cmd::Mixer(MixerParams { fader: [1.0; DECKS], master: 1.0, trim: [1.0; DECKS], ..Default::default() })).unwrap();
         tx.send(Cmd::Deck(0, PlayerCmd::Play(true))).unwrap();
         let mut out = vec![0f32; 48000 * 2];
         e.render(&mut out, 2);

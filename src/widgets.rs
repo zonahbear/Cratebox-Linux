@@ -19,7 +19,10 @@ pub const LOOP: Color32 = Color32::from_rgb(0xf5, 0xd6, 0x4a);
 pub const GREEN: Color32 = Color32::from_rgb(0x3d, 0xdc, 0x84);
 pub const RED: Color32 = Color32::from_rgb(0xff, 0x3b, 0x55);
 pub const WAVE_BG: Color32 = Color32::from_rgb(0x05, 0x06, 0x08);
-pub fn deck_color(i: usize) -> Color32 { if i == 0 { Color32::from_rgb(0x39, 0xa7, 0xff) } else { Color32::from_rgb(0xff, 0x8a, 0x3d) } }
+/// the web app's deck colours: 1 blue, 2 orange, 3 teal, 4 magenta
+pub fn deck_color(i: usize) -> Color32 {
+    match i { 0 => Color32::from_rgb(0x39, 0xa7, 0xff), 1 => Color32::from_rgb(0xff, 0x8a, 0x3d), 2 => Color32::from_rgb(0x2f, 0xd3, 0xc0), _ => Color32::from_rgb(0xe1, 0x5b, 0xd2) }
+}
 pub fn rgb(c: [u8; 3]) -> Color32 { Color32::from_rgb(c[0], c[1], c[2]) }
 pub fn mono(size: f32) -> FontId { FontId::monospace(size) }
 pub fn prop(size: f32) -> FontId { FontId::proportional(size) }
@@ -52,6 +55,15 @@ pub fn tag(ui: &mut Ui, text: &str, lit: bool, color: Color32) -> Response {
     p.rect_stroke(rect, 3.0, Stroke::new(1.0_f32, c), StrokeKind::Inside);
     if r.hovered() { p.rect_filled(rect, 3.0, Color32::from_white_alpha(10)); }
     p.text(rect.center(), egui::Align2::CENTER_CENTER, text, prop(11.5), if lit { color } else { MUTED });
+    r
+}
+/// a pad-mode tab: an underline in the deck colour when it's the mode
+pub fn tab(ui: &mut Ui, text: &str, size: Vec2, lit: bool, color: Color32, font: f32) -> Response {
+    let (rect, r) = ui.allocate_exact_size(size, Sense::click());
+    let p = ui.painter();
+    p.rect_filled(rect, 3.0, if lit { Color32::from_rgba_unmultiplied(color.r(), color.g(), color.b(), 40) } else if r.hovered() { Color32::from_rgb(0x23, 0x28, 0x31) } else { RAISE });
+    if lit { p.rect_filled(Rect::from_min_size(pos2(rect.left(), rect.bottom() - 2.0), vec2(rect.width(), 2.0)), 0.0, color); }
+    p.text(rect.center(), egui::Align2::CENTER_CENTER, text, bold(font), if lit { color } else { MUTED });
     r
 }
 pub fn round_button(ui: &mut Ui, text: &str, d: f32, lit: bool, accent: Color32) -> Response {
@@ -300,7 +312,6 @@ pub fn paint_lane(p: &egui::Painter, rect: Rect, d: &Deck, i: usize, zoom: f64, 
     }
     // playhead
     p.rect_filled(Rect::from_min_size(pos2(cx - 1.0, rect.top()), vec2(2.0, rect.height())), 0.0, RED);
-    p.text(pos2(rect.right() - 8.0, rect.top() + 12.0), egui::Align2::RIGHT_CENTER, format!("{:.2}", d.eff_bpm()), mono(12.0), Color32::from_white_alpha(230));
 }
 
 /// the whole-track overview with phrase strip, cues, loop and playhead
