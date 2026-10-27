@@ -4,7 +4,14 @@
 # so Cratebox adds them to the collection (and copies them to a plugged-in stick).
 # First run installs Firefox (Mozilla's apt repo, not the snap), firejail and that policy.
 DL="$HOME/Music/Cratebox Downloads"
-mkdir -p "$DL"
+LOG="$HOME/.local/share/cratebox/firefox.log"
+mkdir -p "$DL" "$(dirname "$LOG")"
+# the button's output goes to firefox.log (the kiosk has no terminal to show errors in)
+exec >>"$LOG" 2>&1
+echo "--- $(date) FIREFOX button"
+term() {
+    for t in x-terminal-emulator qterminal xterm; do command -v "$t" >/dev/null && { echo "$t"; return; }; done
+}
 if ! command -v firefox >/dev/null || ! command -v firejail >/dev/null || [ ! -f /etc/firefox/policies/policies.json ]; then
     setup=$(mktemp)
     cat > "$setup" <<'SETUP'
@@ -21,7 +28,10 @@ cat > /etc/firefox/policies/policies.json <<'JSON'
 {"policies": {"DownloadDirectory": "${home}/Music/Cratebox Downloads", "PromptForDownloadLocation": false}}
 JSON
 SETUP
-    exec x-terminal-emulator -e sh -c "echo 'First time: setting up Firefox (from Mozilla) and firejail. Your password, please.';
+    t=$(term)
+    [ -n "$t" ] || { echo "no terminal emulator found to run the setup in"; exit 1; }
+    exec "$t" -e sh -c "echo 'First time: setting up Firefox (from Mozilla) and firejail. Your password, please.';
         sudo sh '$setup' && echo 'Done. Press the FIREFOX button again.' || echo 'Setup failed (see above).'; rm -f '$setup'; sleep 5"
 fi
+echo "starting: firejail firefox"
 exec firejail --whitelist="$DL" firefox --no-remote "$@"
