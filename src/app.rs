@@ -63,6 +63,8 @@ pub struct App {
     /// GLOW (the Puffco lantern following the music) and whether it was sending last frame
     pub glow: crate::heat::Glow,
     glow_was: bool,
+    /// the eased output latency the waveforms are drawn behind (see poll)
+    vis_delay: f64,
     pub tx: Sender<Cmd>,
     pub shared: Shared,
     pub status_snap: Status,
@@ -180,7 +182,7 @@ impl App {
             jobs_tx, jobs_rx, queue: VecDeque::new(), analysing: None, analysed_count: 0, deck_loads: Arc::new(AtomicUsize::new(0)),
             midi: midi::Engine::new(), midi_io: MidiIo::new(), last_keep: Instant::now(), last_led: Instant::now(),
             status: String::new(), status_until: Instant::now(), progress: String::new(), outputs, ui: UiState::default(), last_flush: Instant::now(),
-            repaint: None, copying: None, midi_query: vec![], rec_armed: false, loads: 0, glow: crate::heat::Glow::new(), glow_was: false, sync_held: [None; DECKS], downloads: (Instant::now(), None), hp_note: String::new(), reconnect: None, scanning: 0,
+            repaint: None, copying: None, midi_query: vec![], rec_armed: false, loads: 0, glow: crate::heat::Glow::new(), glow_was: false, vis_delay: 0.0, sync_held: [None; DECKS], downloads: (Instant::now(), None), hp_note: String::new(), reconnect: None, scanning: 0,
         };
         app.midi.use_profile("learn", vec![]);
         app.midi.four = app.store.settings.four;
@@ -1164,8 +1166,11 @@ impl App {
         let snap = self.status_snap;
         for i in 0..DECKS { self.decks[i].on_report(&snap.decks[i], snap.at); }
         // draw what's being heard: the output latency, less the frame on its way to the screen, plus the user's nudge
+        // (the latency reading moves by up to a buffer from one callback to the next; eased over ~1 s so
+        // the waveforms don't wobble or snap with it)
         let delay = (self.audio.latency() - 1.0 / 60.0 + self.store.settings.wave_offset_ms / 1000.0).clamp(-0.2, 0.5);
-        for d in self.decks.iter_mut() { d.vis_delay = delay; }
+        self.vis_delay = if (delay - self.vis_delay).abs() > 0.1 { delay } else { self.vis_delay + (delay - self.vis_delay) * 0.02 };
+        for d in self.decks.iter_mut() { d.vis_delay = self.vis_delay; }
         while self.trash_rx.try_recv().is_ok() {} // finished-with audio buffers get freed here, not on the audio thread
         if let Some(e) = self.audio.take_error() { self.say(&format!("Sound output problem: {e}"), 8.0); }
         self.watch_output();

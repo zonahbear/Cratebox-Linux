@@ -60,6 +60,8 @@ pub struct Settings {
     pub browse_close_on_load: bool,
     /// nudges the scrolling waveforms against the sound, ms (+ = drawn later)
     pub wave_offset_ms: f64,
+    /// header shows frames per second and missed screen refreshes (for chasing waveform stutter)
+    pub show_fps: bool,
     /// colour theme (widgets::THEMES)
     pub theme: String,
     /// player view with the bottom library closed (the pop-up browser stands in for it)
@@ -84,7 +86,7 @@ impl Default for Settings {
         Settings {
             folders: vec![], devices: vec![], bpm_range: 3, bpm_lo: 70.0, bpm_hi: 180.0, deck_view: "auto".into(), wave_style: "rgb".into(), spin: 2.5, mt: vec![true; 4], four: false, three: false, wave: false,
             bfx_fx: "ECHO".into(), bfx_depth: 0.55, bfx_ch: 0, bfx_beats: HashMap::new(), rec_dir: String::new(),
-            heat_curves: HashMap::new(), heat_last: crate::heat::DEFAULT_NAME.into(), heat_hold_f: 500.0, heat_puff_full: 0.0, heat_device: String::new(), heat_glow: false, heat_glow_knob: "intensity".into(), heat_models: HashMap::new(), zoom: 8.0, lib_h: 0.0, tree_w: 0.0, browse: false, browse_close_on_load: true, wave_offset_ms: 0.0, theme: "Night".into(), lib_hidden: false,
+            heat_curves: HashMap::new(), heat_last: crate::heat::DEFAULT_NAME.into(), heat_hold_f: 500.0, heat_puff_full: 0.0, heat_device: String::new(), heat_glow: false, heat_glow_knob: "intensity".into(), heat_models: HashMap::new(), zoom: 8.0, lib_h: 0.0, tree_w: 0.0, browse: false, browse_close_on_load: true, wave_offset_ms: 0.0, show_fps: false, theme: "Night".into(), lib_hidden: false,
             out_device: String::new(), hp_mode: "auto".into(), hp_device: String::new(), midi_in: String::new(), profile_for: HashMap::new(),
             learned: HashMap::new(), base_path: String::new(), pl_open: vec![], bad: vec![], buffer: 256,
         }
