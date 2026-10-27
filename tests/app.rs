@@ -233,6 +233,13 @@ fn whole_app() {
     assert!(app.track(&app.list.view[0].id).is_some());
     let notes = app.tracks.iter().filter(|t| t.device.is_none()).count();
     assert_eq!(notes, 4, "the collection doesn't mix device tracks in");
+    // the same file in the collection (name + size as on the stick) plays on rekordbox's grid too
+    let dt = app.tracks.iter().find(|t| t.device.is_some() && t.title == "Demo Track 1").unwrap().clone();
+    let twin = cratebox::library::Track { id: "twin".into(), path: music().join("Test Artist - House Groove 126.wav"), name: dt.name.clone(), size: dt.size, title: "Twin".into(), ..Default::default() };
+    app.load_track(1, twin);
+    wait(&mut app, 30.0, "twin load", |a| a.decks[1].loaded() && a.decks[1].track.as_ref().is_some_and(|t| t.id == "twin"));
+    let ana = app.decks[1].ana.as_ref().unwrap();
+    assert_eq!((ana.bpm, ana.first_beat), (128.0, 0.025), "rekordbox's grid for the collection's copy");
 
     // ---- MIDI learn on an unknown controller
     app.use_profile("learn");

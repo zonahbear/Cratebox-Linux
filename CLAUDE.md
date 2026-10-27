@@ -114,6 +114,9 @@ distro/            Cratebox OS ISO: build-iso.sh remasters Lubuntu 26.04.1 (laye
   HEAT's messages go to heat.log in the data dir.
 - HEAT safety rules (slot 4 backed up/restored, 600°F cutoff, 350-590°F clamp) must match zonahbear/truecurve.
 - CRATEBOX_DEMO=1 (+ CRATEBOX_DEMO_HEAT=1) drive the screenshots; 4-deck demo loads decks 3/4 too.
+- rekordbox grids win: stick tracks, XML imports, and collection tracks with a stick twin (same file name + size,
+  app.rs adopt_rb_grid at load). Settings → rekordbox → Compare grids logs bar-1 offsets to grid-compare.log
+  (evidence for the "bar 1 half a bar late" report; synthetic tests are all on bar 1, so tuning needs real tracks).
 - rekordbox is read-only here: never writes to a stick (the web app's playlist writer isn't ported).
 - Binary refuses to run on CPUs without AVX2/FMA/BMI2 and says how to rebuild.
 - `build-release.sh` links with `--allow-shlib-undefined` on purpose (user's own libasound at run time).

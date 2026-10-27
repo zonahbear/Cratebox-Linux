@@ -396,6 +396,10 @@ impl App {
         self.loads += 1;
         if self.store.settings.browse && self.store.settings.browse_close_on_load { self.store.settings.browse = false; self.store.dirty_settings = true; }
         self.say(&format!("Loading {} into deck {}…", t.title, i + 1), 0.0);
+        // the same file on a rekordbox stick (name and size): its grid wins over Cratebox's own
+        let twin = if t.device.is_none() && !t.grid_manual {
+            self.tracks.iter().find(|x| x.device.is_some() && x.anlz_path.is_some() && x.size == t.size && x.name.eq_ignore_ascii_case(&t.name)).and_then(|x| x.anlz_path.clone())
+        } else { None };
         let tx = self.jobs_tx.clone();
         let sr = self.audio.sr;
         let range = self.range();
@@ -406,6 +410,7 @@ impl App {
             let res = (|| -> Result<Job, String> {
                 let mut track = t;
                 if track.device.is_some() && !track.rb_read { read_device_analysis(&mut track); }
+                if let Some(anlz) = twin { adopt_rb_grid(&mut track, anlz); }
                 let d = decode(&track.path)?;
                 if let (Some(ti), true) = (&d.title, track.artist.is_empty()) { track.title = ti.clone(); }
                 if let (Some(a), true) = (&d.artist, track.artist.is_empty()) { track.artist = a.clone(); }
@@ -516,6 +521,29 @@ impl App {
         if has_copy { self.mount(&copy, false); }
         if matches!(&self.view, View::Dev(x) | View::DevPl(x, _) if x == id) && !has_copy { self.set_view(View::All); } else { self.apply_view(true); }
         self.say(&format!("{} ejected: safe to pull out{}", d.name, if has_copy { ". Playing from the copy on this computer" } else { "" }), 6.0);
+    }
+    /// every collection track that's also on a plugged-in rekordbox stick: does Cratebox's bar 1 land where
+    /// rekordbox's does? Reads the stick's analysis files on a thread; the summary comes back as a status
+    /// line, each track in grid-compare.log (data dir)
+    pub fn compare_grids(&mut self) {
+        let pairs: Vec<(Track, PathBuf)> = self.tracks.iter().filter(|t| t.device.is_none() && !t.grid_manual && t.first_beat.is_some()).filter_map(|t| {
+            self.tracks.iter().find(|x| x.device.is_some() && x.anlz_path.is_some() && x.size == t.size && x.name.eq_ignore_ascii_case(&t.name)).and_then(|x| x.anlz_path.clone()).map(|a| (t.clone(), a))
+        }).collect();
+        if pairs.is_empty() { self.say("No tracks are both in the collection and on a plugged-in rekordbox stick", 6.0); return; }
+        self.say(&format!("Comparing {} grids with rekordbox…", pairs.len()), 0.0);
+        let tx = self.jobs_tx.clone();
+        let wake = self.repaint.clone();
+        std::thread::spawn(move || {
+            let mut off = [0usize; 4];
+            for (t, anlz) in pairs {
+                let mut tw = Track { anlz_path: Some(anlz), ..Default::default() };
+                if !read_device_analysis(&mut tw) { continue; }
+                if let (Some(rb), Some(rf)) = (tw.bpm, tw.first_beat) { if let Some(b) = grid_compare_line(&t, rb, rf) { off[b as usize] += 1; } }
+            }
+            let n: usize = off.iter().sum();
+            let _ = tx.send(Job::Say(format!("Grids vs rekordbox ({n} tracks, same tempo): bar 1 matches on {}, 1 beat late on {}, half a bar off on {}, 1 beat early on {}. Details in grid-compare.log", off[0], off[1], off[2], off[3]), 20.0));
+            if let Some(w) = wake { w(); }
+        });
     }
     /// stop every deck (battery critical)
     pub fn stop_all(&mut self) {
@@ -1229,6 +1257,12 @@ impl App {
                 self.add_tracks(tracks, quiet);
             }
             Job::Loaded { deck, gen, track, l, r, sr, ana, mono } => {
+                // took rekordbox's grid from the stick's copy of this file: keep it in the library
+                if track.device.is_none() && track.grid_from.as_deref() == Some("rekordbox") && self.track(&track.id).is_some_and(|x| !x.grid_manual) {
+                    self.save_track(&track);
+                    self.apply_view(true);
+                    self.say(&format!("Deck {}: using rekordbox's grid from the USB stick", deck + 1), 4.0);
+                }
                 let cues = match self.store.cues.get(&track.id) { Some(c) => c.clone().norm(), None => rb_cues_for(&track).unwrap_or_else(Cues::empty) };
                 let id = track.id.clone();
                 self.decks[deck].finish_load(gen, track, l, r, sr, ana, mono, cues);
@@ -1329,6 +1363,32 @@ impl App {
 pub fn level(p: f32) -> f32 { ((20.0 * (p + 1e-9).log10() + 42.0) / 42.0).clamp(0.0, 1.0) }
 
 impl Default for App { fn default() -> Self { App::new() } }
+
+/// a collection track that's also on a rekordbox stick: take rekordbox's grid (and phrases) from the
+/// stick's analysis file, as `read_device_analysis` does for the stick's own tracks. Where Cratebox had
+/// its own grid, the two downbeats are compared in grid-compare.log (data dir), evidence for tuning the
+/// downbeat vote ("Cratebox starts bar 1 half a bar late").
+fn adopt_rb_grid(track: &mut Track, anlz: PathBuf) {
+    let mut tw = Track { anlz_path: Some(anlz), ..Default::default() };
+    if !read_device_analysis(&mut tw) { return; }
+    let (Some(rb), Some(rf)) = (tw.bpm, tw.first_beat) else { return };
+    let _ = grid_compare_line(track, rb, rf);
+    track.bpm = Some(rb); track.first_beat = Some(rf); track.auto_bpm = Some(rb); track.auto_first = Some(rf);
+    track.grid_manual = true; track.grid_from = Some("rekordbox".into());
+    if tw.phrases.as_ref().is_some_and(|p| !p.is_empty()) { track.phrases = tw.phrases; }
+}
+
+/// how many beats Cratebox's bar 1 sits after rekordbox's (0-3; None: no grid of its own or another
+/// tempo), logged to grid-compare.log
+fn grid_compare_line(t: &Track, rb: f64, rf: f64) -> Option<i64> {
+    let (cb, cf) = (t.bpm?, t.first_beat?);
+    if t.grid_manual || (cb - rb).abs() / rb >= 0.005 { return None; }
+    let beats = ((cf - rf) / (60.0 / rb)).round().rem_euclid(4.0) as i64;
+    let line = format!("{} - {}\tcratebox {cb:.2} @ {cf:.3}s\trekordbox {rb:.2} @ {rf:.3}s\tbar 1 off by {beats} beat(s)\n", t.artist, t.title);
+    use std::io::Write;
+    if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(crate::store::data_dir().join("grid-compare.log")) { let _ = f.write_all(line.as_bytes()); }
+    Some(beats)
+}
 
 /// where the WEB button (Chrome) and Nicotine+ (Soulseek) save downloads (set up by cratebox-web and the kiosk session)
 pub fn downloads_dir() -> Option<PathBuf> { dirs::home_dir().map(|h| h.join("Music/Cratebox Downloads")) }
