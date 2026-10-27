@@ -263,24 +263,33 @@ pub fn paint_lane(p: &egui::Painter, rect: Rect, d: &Deck, i: usize, zoom: f64, 
     }
     let a = d.ana.as_ref().unwrap();
     let w: &Wave = &a.wave;
-    let t = d.now();
+    let t = d.vis_now();
     let pps = rect.width() as f64 / zoom / d.rate().max(0.05);
     let t0 = t - (cx - rect.left()) as f64 / pps;
     let mut m = Mesh::default();
     let half = rect.height() / 2.0 - 2.0;
-    let step = 1.0f32;
-    let mut x = rect.left();
+    // one column per physical pixel, fixed to the track's timeline (column c covers c/cps..(c+1)/cps
+    // seconds), so a column keeps its samples as it scrolls instead of being re-cut every frame (that
+    // re-cutting is what made it shimmer); only the whole picture slides, in whole physical pixels
+    let ppp = p.ctx().pixels_per_point();
+    let step = 1.0 / ppp;
+    let cps = pps / step as f64;
+    let c0 = (t0 * cps).floor() as i64;
+    let x0 = rect.left() + ((((c0 as f64 / cps - t0) * pps) as f32 * ppp).round() / ppp);
+    let clip = p.with_clip_rect(rect);
+    let mut c = c0;
+    let mut x = x0;
     while x < rect.right() {
-        let xr = (x - rect.left()) as f64;
-        let k0 = ((t0 + xr / pps) * w.wps).floor() as i64;
-        let k1 = ((t0 + (xr + step as f64) / pps) * w.wps).floor() as i64;
+        let k0 = (c as f64 / cps * w.wps).floor() as i64;
+        let k1 = ((c + 1) as f64 / cps * w.wps).floor() as i64;
         if k1 >= 0 && k0 < w.peak.len() as i64 {
             let v = agg(&w.peak, &w.rms, &w.low, &w.mid, &w.high, k0, k1);
             wave_col(&mut m, x, step, mid, half, v, rgb_style, if x < cx { 0.62 } else { 1.0 });
         }
+        c += 1;
         x += step;
     }
-    p.add(m);
+    clip.add(m);
     p.rect_filled(Rect::from_min_size(rect.min, vec2(4.0, rect.height())), 0.0, col);
     let xt = |time: f64| cx + ((time - t) * pps) as f32;
     // loop region

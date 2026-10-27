@@ -42,9 +42,9 @@ From Linux there is an untested fallback:
 ## Using it
 
 - **Boot:** straight into Cratebox, full screen (`cratebox --kiosk` under a bare openbox, with no panel).
-- **Desktop (Soulseek, Chrome, Wi-Fi):** quit Cratebox with **Alt+F4** or **Ctrl+Alt+Q** and the
-  Lubuntu desktop starts in the same session. On the live stick you get the normal "Try / Install"
-  prompt. To get back to Cratebox, use its menu entry (opens in a window) or reboot.
+- **Desktop (Soulseek, Chrome, Wi-Fi):** quit Cratebox (its **OFF** menu → *Exit to login screen*, **Alt+F4**
+  or **Ctrl+Alt+Q**) and the login screen comes back: pick the *Lubuntu* session there. On the live stick
+  quitting opens the normal "Try / Install" desktop instead. OFF → *Shut down* turns the computer off.
 - **Install:** from the desktop, choose Install. **Normal** or **Minimal** both give you everything
   Cratebox OS adds; Minimal then takes out Lubuntu's extra apps (office, media players and so on) at
   the end of the install. The installer turns on automatic login, so every boot lands in the Cratebox

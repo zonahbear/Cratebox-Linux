@@ -1,0 +1,15 @@
+# Cratebox OS: every X session (Cratebox, Lubuntu, startx) draws at 2x on a high-density panel.
+# The 12-inch MacBook is 2304x1440 at 226 ppi: 2x gives 1152x720 points. Qt 6 (LXQt) takes its scale
+# from Xft.dpi, GTK apps (Chrome) from GDK_SCALE. Screens under 2000 px wide keep their own scale.
+# The Cratebox session stays at exactly 2x (its layout is sized for 1152x720); the LXQt desktop
+# uses 1.75x (Xft.dpi 168): Jonah found 2x a little too big there.
+# Sourced by /etc/X11/Xsession (SDDM and startx both run it).
+cratebox_w=$(xrandr --current 2>/dev/null | sed -n 's/.* connected.* \([0-9]\{1,\}\)x[0-9]\{1,\}+0+0.*/\1/p' | head -n1) || true
+if [ "${cratebox_w:-0}" -ge 2000 ]; then
+    cratebox_dpi=168
+    [ "${DESKTOP_SESSION:-}" = cratebox ] && cratebox_dpi=192
+    echo "Xft.dpi: $cratebox_dpi" | xrdb -merge || true    # Xsession runs with set -e
+    GDK_SCALE=2 GDK_DPI_SCALE=0.5
+    export GDK_SCALE GDK_DPI_SCALE
+fi
+unset cratebox_w cratebox_dpi

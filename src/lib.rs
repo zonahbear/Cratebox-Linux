@@ -16,6 +16,7 @@ pub mod maps;
 pub mod midi;
 pub mod rekordbox;
 pub mod playlists;
+pub mod usbcopy;
 pub mod store;
 pub mod audio_io;
 pub mod midi_io;

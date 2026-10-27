@@ -300,7 +300,12 @@ pub fn read_device_analysis(t: &mut Track) -> bool {
     if dat.beats.is_empty() { return false; }
     let ext = std::fs::read(dat_path.with_extension("EXT")).or_else(|_| std::fs::read(dat_path.with_extension("ext"))).ok().map(|b| parse_anlz(&b));
     let Some((bpm, first)) = grid_from_beats(&dat.beats) else { return false };
-    if !t.grid_manual { t.bpm = Some(bpm); t.first_beat = Some(first); t.auto_bpm = Some(bpm); t.auto_first = Some(first); }
+    // rekordbox's grid wins over Cratebox's own analysis (as with an XML import): kept like a grid you set,
+    // and RESET in the grid editor goes back to it
+    if !t.grid_manual {
+        t.bpm = Some(bpm); t.first_beat = Some(first); t.auto_bpm = Some(bpm); t.auto_first = Some(first);
+        t.grid_manual = true; t.grid_from = Some("rekordbox".into());
+    }
     t.phrases = Some(ext.as_ref().and_then(|e| e.phrases.as_ref()).and_then(|p| phrases_from(&dat.beats, p)).unwrap_or_default());
     let src = match &ext { Some(e) if !e.hot.is_empty() || !e.memory.is_empty() => e, _ => &dat };
     t.rb_cues = Some(RbCues { hot: src.hot.clone(), memory: src.memory.clone() });
