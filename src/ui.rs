@@ -1439,6 +1439,8 @@ impl Gui {
                     if ui.button("Import XML…").clicked() { self.app.ui.dialog = Some(FileDialog::new(Purpose::ImportXml, None)); }
                     if ui.button("Export XML…").clicked() { self.app.ui.dialog = Some(FileDialog::new(Purpose::ExportXml, None)); }
                 });
+                ui.label(egui::RichText::new("Tracks that are also on a plugged-in rekordbox stick play on rekordbox's grid.").size(11.0).color(MUTED));
+                if ui.button("Compare Cratebox's grids with the stick").on_hover_text("Checks where Cratebox puts bar 1 against rekordbox, for tracks on both (writes grid-compare.log)").clicked() { self.app.compare_grids(); }
                 ui.horizontal(|ui| {
                     ui.label("Export paths as if the music folders were in:");
                     let r = ui.add(egui::TextEdit::singleline(&mut self.app.store.settings.base_path).hint_text("(leave empty: their real location)").desired_width(220.0));

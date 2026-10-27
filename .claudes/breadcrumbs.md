@@ -97,3 +97,4 @@
   deck screen's top corner (paint_lock), LOCK flag. App.loads counter closes the pop-up browser; BROWSE closes on load
   (settings.browse_close_on_load, default on).
 - Battery alerts 5%/3% + power_off (unload, eject on priority thread, systemctl); power icon far right (paint_power).
+- Rekordbox grid for stick twins (adopt_rb_grid) + Compare grids button (grid-compare.log). Half-bar-late: synthetic tracks are correct; needs Jonah's compare summary to tune analysis.rs downbeat vote (W_KS/W_NOV/W_START).
