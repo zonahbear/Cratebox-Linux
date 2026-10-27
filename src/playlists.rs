@@ -140,6 +140,21 @@ impl Lists {
         self.dirty = true;
         true
     }
+    /// track id → the names of the playlists it's in (the library's PLAYLISTS column)
+    pub fn membership(&self) -> HashMap<String, String> {
+        let mut m: HashMap<String, Vec<&str>> = HashMap::new();
+        for p in self.lists.iter().filter(|p| !p.folder) {
+            for id in &p.items { let v = m.entry(id.clone()).or_default(); if !v.contains(&p.name.as_str()) { v.push(&p.name); } }
+        }
+        m.into_iter().map(|(k, v)| (k, v.join(", "))).collect()
+    }
+    /// changes when a list is added, renamed or gains/loses tracks (when to build `membership` again)
+    pub fn fingerprint(&self) -> u64 {
+        use std::hash::{Hash, Hasher};
+        let mut h = std::collections::hash_map::DefaultHasher::new();
+        for p in &self.lists { p.id.hash(&mut h); p.name.hash(&mut h); p.items.len().hash(&mut h); }
+        h.finish()
+    }
     pub fn path_name(&self, p: &Playlist) -> String {
         let mut parts = vec![p.name.clone()];
         let mut x = p.parent.clone();

@@ -215,7 +215,15 @@ fn whole_app() {
     app.set_view(View::DevPl(dev.clone(), sub));
     assert_eq!(app.list.view.iter().map(|t| t.title.as_str()).collect::<Vec<_>>(), ["Demo Track 1", "Demo Track 2"]);
     app.list.sel = 0;
+    // LOAD LOCK: nothing goes onto a locked deck; loading from BROWSE goes back to the decks
+    app.decks[1].locked = true;
+    let (loads, before) = (app.loads, app.decks[1].track.as_ref().map(|t| t.id.clone()));
     app.load_selected(1);
+    assert!(app.decks[1].track.as_ref().map(|t| t.id.clone()) == before && app.loads == loads, "a locked deck keeps what it has");
+    app.decks[1].locked = false;
+    app.store.settings.browse = true;
+    app.load_selected(1);
+    assert!(app.loads == loads + 1 && !app.store.settings.browse, "loading closes BROWSE");
     wait(&mut app, 30.0, "USB track load", |a| a.decks[1].loaded() || (!a.decks[1].loading && a.decks[1].track.is_none()));
     let d = &app.decks[1];
     let ana = d.ana.as_ref().expect("USB track loaded");

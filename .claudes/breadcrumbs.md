@@ -93,3 +93,6 @@
 - Beat 1: ⌘⇧X / ⌘⇧. via openbox keybinds → `cratebox --cmd beat1 left|right` (src/remote.rs socket). Ctrl+Shift fallback.
   openbox-rc.xml now ships in os-files; cratebox-update runs `openbox --reconfigure`.
 - Library: BPM / KEY / MATCH quick-sort chips next to search (SortKey::Match, library::match_score, App::mix_ref); key highlight: same key bright, neighbours softer.
+- Library PLAYLISTS column (Lists::membership, rebuilt on Lists::fingerprint change). Load Lock: Deck.locked, padlock in the
+  deck screen's top corner (paint_lock), LOCK flag. App.loads counter closes the pop-up browser; BROWSE closes on load
+  (settings.browse_close_on_load, default on).

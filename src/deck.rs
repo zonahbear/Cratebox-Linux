@@ -115,6 +115,8 @@ pub struct Deck {
     coast_hold: Instant,
     pub started_at: Option<Instant>,
     pub mt: bool,
+    /// LOAD LOCK: nothing loads onto this deck until it's unlocked
+    pub locked: bool,
     seek_seq: u64,
     taps: Vec<Instant>,
     pub mono: Option<(Arc<Vec<f32>>, f64)>,
@@ -132,7 +134,7 @@ impl Deck {
             i, tx, track: None, ana: None, duration: 0.0, sr: 44100.0, pos: 0.0, pos_t: now, vis: std::cell::Cell::new((0.0, now)), speed: 0.0, playing: false, pitch: 0.0, range_idx: 0,
             sync: false, sync_since: now, sync_rate: 1.0, sync_mult: 1.0, sync_trim: 0.0, sync_with: None, sync_track: 0, phase_err: None, has_master: false, cue: 0.0, hot: [None; 8], lp: Loop::default(), quant: true,
             pad_mode: PadMode::HotCue, previewing: false, touch: false, loading: false, loop_in_down: None, sent_rate: None, coasting: false,
-            coast_hold: now, started_at: None, mt: true, seek_seq: 0, taps: vec![], mono: None, rephrase_gen: 0, rephrase_at: None,
+            coast_hold: now, started_at: None, mt: true, locked: false, seek_seq: 0, taps: vec![], mono: None, rephrase_gen: 0, rephrase_at: None,
             events: vec![], spin_secs: 2.5, load_gen: 0,
         }
     }
@@ -202,6 +204,7 @@ impl Deck {
 
     // ---- loading: the app decodes and analyses off-thread, then hands the result here ----
     pub fn begin_load(&mut self, t: Track) -> Result<u64, String> {
+        if self.locked { return Err(format!("Deck {} is locked. Tap the lock on its screen to unlock it.", self.i + 1)); }
         if self.playing { return Err(format!("Deck {} is playing. Stop it before loading.", self.i + 1)); }
         self.loading = true;
         // a new track: sync starts over (master and half/double time picked again), from the fader's tempo
