@@ -249,7 +249,7 @@ pub fn row_is_view(r: &TreeRow, v: &View) -> bool {
 }
 
 // ---- rekordbox USB / SD ----
-fn sub(root: &Path, p: &str) -> PathBuf {
+pub fn sub(root: &Path, p: &str) -> PathBuf {
     // rekordbox paths start with "/" and use "/"; Linux filesystems on FAT/exFAT sticks may differ in case
     let rel = p.trim_start_matches('/');
     let direct = root.join(rel);

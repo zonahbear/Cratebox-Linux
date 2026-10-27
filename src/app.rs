@@ -31,6 +31,8 @@ pub enum Job {
     Rephrased { deck: usize, gen: u64, phrases: Vec<Phrase> },
     Mounted { root: PathBuf, res: Result<(Device, Vec<Track>), String>, remember: bool },
     CopyProgress { done: u64, total: u64 },
+    /// rekordbox drives mounted right now (drives.rs, every 3 s)
+    Drives(Vec<PathBuf>),
     Copied { stick: PathBuf, copy: PathBuf, res: Result<crate::usbcopy::Copied, String> },
 }
 
@@ -175,6 +177,26 @@ impl App {
         app.connect_midi();
         app.apply_view(false);
         app
+    }
+
+    /// mount plugged-in sticks and open rekordbox ones by themselves (the kiosk has no automounter);
+    /// started by the window (after `repaint` is set), not by tests
+    pub fn watch_drives(&mut self) {
+        if std::env::var_os("CRATEBOX_NO_DRIVES").is_some() || cfg!(not(target_os = "linux")) { return; }
+        let tx = self.jobs_tx.clone();
+        let wake = self.repaint.clone();
+        std::thread::spawn(move || {
+            let mut last: Vec<PathBuf> = vec![];
+            loop {
+                let now = crate::drives::scan();
+                if now != last {
+                    if tx.send(Job::Drives(now.clone())).is_err() { return; }
+                    if let Some(w) = &wake { w(); }
+                    last = now;
+                }
+                std::thread::sleep(std::time::Duration::from_secs(3));
+            }
+        });
     }
 
     pub fn say(&mut self, s: &str, secs: f32) {
@@ -1097,6 +1119,24 @@ impl App {
                 }
                 Err(e) => if remember { self.say(&e, 9.0) },
             },
+            Job::Drives(roots) => {
+                // new rekordbox sticks open on their own (a stick replaces its local copy: same device id)
+                for r in &roots {
+                    if !self.lists.devices.iter().any(|d| &d.root == r) { self.mount(r, false); }
+                }
+                // a stick that's gone: close it, and fall back to its local copy if there is one
+                let gone: Vec<(String, PathBuf)> = self.lists.devices.iter()
+                    .filter(|d| !crate::usbcopy::is_copy(&d.root) && !d.root.join("PIONEER").exists() && !roots.contains(&d.root))
+                    .map(|d| (d.id.clone(), d.root.clone())).collect();
+                for (id, root) in gone {
+                    if self.decks.iter().any(|d| d.track.as_ref().and_then(|t| t.device.as_deref()) == Some(id.as_str())) { continue; }
+                    let remembered = self.store.settings.devices.contains(&root);
+                    self.close_device(&id);
+                    if remembered { self.store.settings.devices.push(root.clone()); }
+                    let copy = crate::usbcopy::copy_root(&root.file_name().map(|s| s.to_string_lossy().to_string()).unwrap_or_default());
+                    if copy.join("PIONEER").exists() { self.mount(&copy, false); }
+                }
+            }
             Job::CopyProgress { done, total } => {
                 self.copying = Some((done, total));
                 let pc = if total > 0 { done * 100 / total } else { 0 };

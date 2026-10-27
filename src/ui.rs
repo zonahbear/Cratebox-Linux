@@ -68,6 +68,7 @@ impl Gui {
         let wake: std::sync::Arc<dyn Fn() + Send + Sync> = std::sync::Arc::new(move || ctx.request_repaint());
         app.repaint = Some(wake.clone());
         app.midi_io.set_wake(wake);
+        app.watch_drives();
         Gui { app, deck_rects: [Rect::NOTHING; DECKS], jog_last: [None; DECKS], lane_drag: [None; DECKS], pad_held: None, frames: 0, test_shot: None,
             rects: Default::default(), uitest: crate::uitest::UiTest::from_env(), heat_open: false, power_open: false, power_confirm: None, heat_paste: String::new(), hitting: false, focus_search: false, keys_open: false }
     }
@@ -963,7 +964,7 @@ impl Gui {
                 let stick_row = r.kind == RowKind::Dev && self.app.lists.devices.iter().any(|d| d.id == r.dev && !crate::usbcopy::is_copy(&d.root));
                 let cr = xr.translate(vec2(-22.0, 0.0));
                 let hovering_c = stick_row && resp.hover_pos().is_some_and(|hp| cr.contains(hp));
-                if stick_row && (resp.hovered() || is_view) {
+                if stick_row {
                     p.text(cr.center(), egui::Align2::CENTER_CENTER, "↓", prop(14.0), if hovering_c { FG } else { MUTED });
                     if hovering_c { resp.clone().on_hover_text("Copy to this computer / update the copy"); }
                 }

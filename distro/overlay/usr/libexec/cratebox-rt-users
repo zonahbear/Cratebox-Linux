@@ -8,3 +8,13 @@ getent passwd | awk -F: '$3 >= 1000 && $3 < 60000 { print $1 }' | while read -r 
         id -nG "$u" | tr ' ' '\n' | grep -qx "$g" || usermod -aG "$g" "$u"
     done
 done
+
+# Installed system only: delete the overlay whiteouts the installer copied as 0,0 character devices
+# (list made by build-iso.sh), then rebuild the module list if one was a kernel module.
+mods=0
+[ -f /usr/share/cratebox-os/whiteouts ] && while read -r w; do
+    [ -c "$w" ] && [ "$(stat -c %t,%T "$w")" = 0,0 ] || continue
+    rm -f "$w" && case "$w" in /lib/modules/*|/usr/lib/modules/*) mods=1;; esac
+done < /usr/share/cratebox-os/whiteouts
+[ "$mods" = 1 ] && depmod -a
+exit 0
