@@ -428,6 +428,27 @@ impl App {
             if let Some(w) = wake { w(); }
         });
     }
+    /// EJECT: close the stick, unmount it so it can be pulled out, and carry on from its local copy
+    pub fn eject_device(&mut self, id: &str) {
+        if self.copying.is_some() { self.say("Wait for the copy to finish first", 4.0); return; }
+        let Some(d) = self.lists.devices.iter().find(|x| x.id == id && !crate::usbcopy::is_copy(&x.root)).cloned() else { return };
+        let copy = crate::usbcopy::copy_root(&d.root.file_name().map(|s| s.to_string_lossy().to_string()).unwrap_or_default());
+        let has_copy = copy.join("PIONEER").exists();
+        // decks hold their whole track in memory, so a loaded stick track keeps playing; only refuse when
+        // there's no copy to carry on from
+        if !has_copy && self.decks.iter().any(|x| x.track.as_ref().and_then(|t| t.device.as_deref()) == Some(id)) {
+            self.say("Load something else on the decks first", 4.0); return;
+        }
+        if let Err(e) = crate::drives::eject(&d.root) { self.say(&e, 6.0); return; }
+        self.lists.devices.retain(|x| x.id != id);
+        self.tracks.retain(|t| t.device.as_deref() != Some(id));
+        self.reindex();
+        self.store.settings.devices.retain(|p| p != &d.root);
+        self.store.dirty_settings = true;
+        if has_copy { self.mount(&copy, false); }
+        if matches!(&self.view, View::Dev(x) | View::DevPl(x, _) if x == id) && !has_copy { self.set_view(View::All); } else { self.apply_view(true); }
+        self.say(&format!("{} ejected: safe to pull out{}", d.name, if has_copy { ". Playing from the copy on this computer" } else { "" }), 6.0);
+    }
     pub fn close_device(&mut self, id: &str) {
         if self.decks.iter().any(|d| d.track.as_ref().and_then(|t| t.device.as_deref()) == Some(id)) { self.say("Load something else on the decks first", 4.0); return; }
         let Some(d) = self.lists.devices.iter().find(|x| x.id == id).cloned() else { return };
@@ -1112,10 +1133,12 @@ impl App {
                     self.lists.open.insert(format!("dev:{id}"));
                     self.lists.devices.push(dev);
                     for t in tracks { self.by_id.insert(t.id.clone(), self.tracks.len()); self.tracks.push(t); }
-                    if remember && !self.store.settings.devices.contains(&root) { self.store.settings.devices.push(root); self.store.dirty_settings = true; }
+                    if remember && !self.store.settings.devices.contains(&root) { self.store.settings.devices.push(root.clone()); self.store.dirty_settings = true; }
                     self.lists.rematch(&self.tracks);
                     self.apply_view(true);
                     self.say(&format!("{name}: {n} tracks, {pls} playlists (read-only)"), 6.0);
+                    // a stick that's plugged in syncs to this computer by itself (only new or changed files)
+                    if !crate::usbcopy::is_copy(&root) && self.copying.is_none() && self.repaint.is_some() { self.copy_device(&id); }
                 }
                 Err(e) => if remember { self.say(&e, 9.0) },
             },
@@ -1147,8 +1170,11 @@ impl App {
                 match res {
                     Ok(c) => {
                         self.store.settings.devices.retain(|p| p != &stick);
+                        if !self.store.settings.devices.contains(&copy) { self.store.settings.devices.push(copy.clone()); }
                         self.store.dirty_settings = true;
-                        self.mount(&copy, true);
+                        // while the stick is in, keep playing from it (switching would make the drive
+                        // watcher reopen the stick and sync again); the copy takes over when it's pulled
+                        if !stick.join("PIONEER").exists() { self.mount(&copy, true); }
                         self.say(&if c.files == 0 { format!("Local copy already up to date ({} files)", c.same) } else { format!("Copied {} files ({} MB); {} already there. You can take the stick out.", c.files, c.bytes >> 20, c.same) }, 8.0);
                     }
                     Err(e) => self.say(&e, 9.0),
