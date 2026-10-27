@@ -23,6 +23,9 @@ use std::sync::mpsc::{channel, Receiver, Sender};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
+/// how long SYNC is held to make a deck the master
+pub const HOLD_MASTER: Duration = Duration::from_millis(600);
+
 pub enum Job {
     /// a line for the status bar from a background thread
     Say(String, f32),
@@ -66,6 +69,10 @@ pub struct App {
     /// soft takeover after a layer switch: control/deck -> the last hardware value seen (None = none yet)
     pickup: HashMap<(String, usize), Option<f64>>,
     pub rec: Option<crate::recorder::Recorder>,
+    /// REC pressed with nothing playing: recording starts when a deck starts
+    pub rec_armed: bool,
+    /// when each deck's SYNC went down (cleared once it counts as a hold)
+    pub sync_held: [Option<Instant>; DECKS],
     pub heat: crate::heat::Heat,
     pub route: Route,
     pub tracks: Vec<Track>,
@@ -167,7 +174,7 @@ impl App {
             jobs_tx, jobs_rx, queue: VecDeque::new(), analysing: None, analysed_count: 0, deck_loads: Arc::new(AtomicUsize::new(0)),
             midi: midi::Engine::new(), midi_io: MidiIo::new(), last_keep: Instant::now(), last_led: Instant::now(),
             status: String::new(), status_until: Instant::now(), progress: String::new(), outputs, ui: UiState::default(), last_flush: Instant::now(),
-            repaint: None, copying: None, midi_query: vec![], downloads: (Instant::now(), None), hp_note: String::new(), reconnect: None, scanning: 0,
+            repaint: None, copying: None, midi_query: vec![], rec_armed: false, sync_held: [None; DECKS], downloads: (Instant::now(), None), hp_note: String::new(), reconnect: None, scanning: 0,
         };
         app.midi.use_profile("learn", vec![]);
         app.midi.four = app.store.settings.four;
@@ -768,13 +775,17 @@ impl App {
                 let p = r.stop();
                 self.say(&format!("Recording saved: {} ({}:{:02})", p.display(), secs as u64 / 60, secs as u64 % 60), 10.0);
             }
-            None => {
-                let dir = if self.store.settings.rec_dir.is_empty() { crate::recorder::default_dir() } else { PathBuf::from(&self.store.settings.rec_dir) };
-                match crate::recorder::Recorder::start(&dir, self.audio.sr, &format!("Cratebox {}", local_stamp())) {
-                    Ok((r, p)) => { let _ = self.tx.send(Cmd::Record(Some(p))); self.say(&format!("Recording the master to {}", r.path.display()), 5.0); self.rec = Some(r); }
-                    Err(e) => self.say(&e, 8.0),
-                }
-            }
+            None if self.rec_armed => { self.rec_armed = false; self.say("REC cancelled", 3.0); }
+            None if !self.decks.iter().any(|d| d.playing) => { self.rec_armed = true; self.say("REC armed: recording starts when a deck plays", 5.0); }
+            None => self.start_rec(),
+        }
+    }
+    fn start_rec(&mut self) {
+        self.rec_armed = false;
+        let dir = if self.store.settings.rec_dir.is_empty() { crate::recorder::default_dir() } else { PathBuf::from(&self.store.settings.rec_dir) };
+        match crate::recorder::Recorder::start(&dir, self.audio.sr, &format!("Cratebox {}", local_stamp())) {
+            Ok((r, p)) => { let _ = self.tx.send(Cmd::Record(Some(p))); self.say(&format!("Recording the master to {}", r.path.display()), 5.0); self.rec = Some(r); }
+            Err(e) => self.say(&e, 8.0),
         }
     }
 
@@ -820,6 +831,14 @@ impl App {
     pub fn toggle_play(&mut self, i: usize) { let p = self.peers(); self.decks[i].toggle_play(&p); }
     pub fn set_playing(&mut self, i: usize, on: bool) { let p = self.peers(); self.decks[i].set_playing(on, &p); }
     pub fn set_sync(&mut self, i: usize, on: bool) { let p = self.peers(); self.decks[i].set_sync(on, &p); }
+    /// SYNC held: deck `i` becomes the tempo master; the other synced decks follow it
+    pub fn make_master(&mut self, i: usize) {
+        if !self.decks[i].loaded() || self.decks[i].bpm() <= 0.0 { return; }
+        self.decks[i].become_master();
+        let m = self.peers()[i];
+        for j in 0..DECKS { if j != i && self.deck_active(j) { self.decks[j].follow_master(m); } }
+        self.say(&format!("Deck {} is the master", i + 1), 3.0);
+    }
     /// the deck a synced deck `i` follows, if any (for the MASTER tags)
     pub fn tempo_master(&self) -> Option<usize> {
         let p = self.peers();
@@ -938,7 +957,8 @@ impl App {
             "playCue" => if on { let c = self.decks[i].cue; self.decks[i].seek(c); self.set_playing(i, true); },
             "cue" => if on { self.decks[i].cue_down() } else { self.decks[i].cue_up() },
             "start" => if on { self.set_playing(i, false); self.decks[i].seek(0.0); },
-            "sync" => if on { let s = !self.decks[i].sync; self.set_sync(i, s); },
+            // a tap toggles SYNC on release; held for HOLD_MASTER it makes the deck the master instead (see poll)
+            "sync" => if on { self.sync_held[i] = Some(Instant::now()); } else if self.sync_held[i].take().is_some() { let s = !self.decks[i].sync; self.set_sync(i, s); },
             "syncOn" => if on && !self.decks[i].sync { self.set_sync(i, true) },
             "range" => if on { self.decks[i].cycle_range() },
             "touch" => self.decks[i].jog_touch(on, false),
@@ -1041,6 +1061,10 @@ impl App {
         if let Some(e) = self.audio.take_error() { self.say(&format!("Sound output problem: {e}"), 8.0); }
         self.watch_output();
         self.watch_downloads();
+        for i in 0..DECKS {
+            if self.sync_held[i].is_some_and(|t| t.elapsed() >= HOLD_MASTER) { self.sync_held[i] = None; self.make_master(i); }
+        }
+        if self.rec_armed && self.decks.iter().any(|d| d.playing) { self.start_rec(); }
         if self.midi_query.first().is_some_and(|t| Instant::now() >= *t) {
             self.midi_query.remove(0);
             if let Some(init) = self.midi.profile_info().init { self.midi_io.send(init); }
