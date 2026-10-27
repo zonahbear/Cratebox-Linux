@@ -32,6 +32,7 @@ F12 in the app shows this list. Deck keys follow the controller's sides: the lef
 | F3 | BROWSE (big library) |
 | F4 | HEAT panel |
 | Ctrl R | REC on / off |
+| ↑ ↓ | WAVE mode: pops up the library; then 1 2 3 4 load on that deck |
 | F11 | Full screen on/off |
 | F12 | Shortcut list |
 | Esc | Close panels, stop MIDI learn |
