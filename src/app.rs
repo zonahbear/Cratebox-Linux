@@ -1243,7 +1243,7 @@ impl App {
         if open.len() != self.store.settings.pl_open.len() || open.iter().any(|x| !self.store.settings.pl_open.contains(x)) { self.store.settings.pl_open = open; self.store.dirty_settings = true; }
         if self.last_flush.elapsed() > Duration::from_secs(1) {
             self.last_flush = Instant::now();
-            if let Err(e) = self.store.flush() { self.say(&format!("Couldn't save your library: {e}"), 8.0); }
+            if let Some(e) = self.store.flush_bg() { self.say(&format!("Couldn't save your library: {e}"), 8.0); }
         }
     }
     pub fn flush_now(&mut self) {

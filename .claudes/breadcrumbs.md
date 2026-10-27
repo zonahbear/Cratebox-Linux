@@ -101,3 +101,5 @@
 - Waveform timing: audio_io measures output latency per callback (Beat.lat); App sets Deck.vis_delay = latency - 1 frame + settings.wave_offset_ms; vis_now subtracts it.
 - GLOW (Puffco lantern rainbow following the music) in heat.rs/app.rs glow_tick; HEAT panel checkbox + FX knob mode. Lantern paths unverified on Proxy.
 - Themes (widgets::THEMES: Night, Midnight, Ember, Neon, Mono; settings.theme; Settings → Look), header icon buttons (Icon::Folder/Globe/List/Wave), wording pass.
+- Perf pass: store.flush_bg (serialise on UI, write on "cratebox-save" thread; failures re-dirty), CRATEBOX_PROFILE=1 frame timer. UI avg ~1.5 ms/frame in Xvfb; the 1 s analysis.json write was the stall suspect.
+- CHANGELOG.md added (plain-language, newest first). Next: Soulseek native client (paused), more settings if Jonah asks.

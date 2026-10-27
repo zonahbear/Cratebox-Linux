@@ -1,5 +1,8 @@
 //! What Cratebox keeps between runs, as JSON files in ~/.local/share/cratebox (or $XDG_DATA_HOME):
 //! settings, the analysis cache, cue points and playlists. Writes go to a temp file then rename.
+//! The once-a-second saves serialise and write on a writer thread of their own (a big library's
+//! analysis.json takes tens of ms: a dropped frame mid-set otherwise); `flush` waits for it, then
+//! writes on the calling thread (quitting, shutting down, tests).
 
 use crate::library::{CacheMap, Cues};
 use crate::midi::Entry;
@@ -105,19 +108,25 @@ pub fn load<T: DeserializeOwned + Default>(name: &str) -> T {
     }
 }
 
-pub fn save<T: Serialize>(name: &str, v: &T) -> Result<(), String> {
+pub fn save<T: Serialize>(name: &str, v: &T) -> Result<(), String> { write_file(name, to_json(v)?) }
+fn to_json<T: Serialize>(v: &T) -> Result<Vec<u8>, String> { serde_json::to_vec(v).map_err(|e| e.to_string()) }
+fn write_file(name: &str, data: Vec<u8>) -> Result<(), String> {
     let dir = data_dir();
     std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
     let p = dir.join(name);
     let tmp = dir.join(format!(".{name}.tmp"));
-    let data = serde_json::to_vec(v).map_err(|e| e.to_string())?;
     std::fs::write(&tmp, data).map_err(|e| e.to_string())?;
     std::fs::rename(&tmp, &p).map_err(|e| e.to_string())
 }
 
+type WriteJob = Box<dyn FnOnce() + Send>;
+
 /// everything persisted, with dirty flags so the app writes only what changed (at most once a second)
 #[derive(Default)]
 pub struct Store {
+    writer: Option<std::sync::mpsc::Sender<WriteJob>>,
+    /// files the writer thread couldn't save (marked dirty again on the next flush_bg) and why
+    failed: std::sync::Arc<std::sync::Mutex<Vec<(&'static str, String)>>>,
     pub settings: Settings,
     pub cache: CacheMap,
     pub cues: HashMap<String, Cues>,
@@ -132,7 +141,41 @@ impl Store {
     pub fn open() -> Store {
         Store { settings: load("settings.json"), cache: load("analysis.json"), cues: load("cues.json"), playlists: load("playlists.json"), ..Default::default() }
     }
+    fn writer(&mut self) -> &std::sync::mpsc::Sender<WriteJob> {
+        self.writer.get_or_insert_with(|| {
+            let (tx, rx) = std::sync::mpsc::channel::<WriteJob>();
+            let _ = std::thread::Builder::new().name("cratebox-save".into()).spawn(move || { for job in rx { job(); } });
+            tx
+        })
+    }
+    /// save what changed on the writer thread; Some(error) if an earlier background save failed
+    pub fn flush_bg(&mut self) -> Option<String> {
+        let failed: Vec<(&'static str, String)> = self.failed.lock().map(|mut f| std::mem::take(&mut *f)).unwrap_or_default();
+        for (name, _) in &failed {
+            match *name { "settings.json" => self.dirty_settings = true, "analysis.json" => self.dirty_cache = true, "cues.json" => self.dirty_cues = true, _ => self.dirty_playlists = true }
+        }
+        let mut jobs: Vec<WriteJob> = vec![];
+        let failed_to = self.failed.clone();
+        let job = |name: &'static str, data: Result<Vec<u8>, String>| -> WriteJob {
+            let f = failed_to.clone();
+            Box::new(move || { if let Err(e) = data.and_then(|d| write_file(name, d)) { if let Ok(mut v) = f.lock() { v.push((name, e)); } } })
+        };
+        // serialising is cheap next to writing; doing it here keeps the data consistent without cloning it
+        if std::mem::take(&mut self.dirty_settings) { jobs.push(job("settings.json", to_json(&self.settings))); }
+        if std::mem::take(&mut self.dirty_cache) { jobs.push(job("analysis.json", to_json(&self.cache))); }
+        if std::mem::take(&mut self.dirty_cues) { jobs.push(job("cues.json", to_json(&self.cues))); }
+        if std::mem::take(&mut self.dirty_playlists) { jobs.push(job("playlists.json", to_json(&self.playlists))); }
+        for j in jobs { let _ = self.writer().send(j); }
+        failed.into_iter().next().map(|(n, e)| format!("{n}: {e}"))
+    }
+    /// wait until the writer thread has saved everything handed to it
+    fn drain(&mut self) {
+        let Some(w) = &self.writer else { return };
+        let (tx, rx) = std::sync::mpsc::channel();
+        if w.send(Box::new(move || { let _ = tx.send(()); })).is_ok() { let _ = rx.recv_timeout(std::time::Duration::from_secs(10)); }
+    }
     pub fn flush(&mut self) -> Result<(), String> {
+        self.drain();
         let mut err = Ok(());
         let mut run = |dirty: &mut bool, r: Result<(), String>| { if r.is_ok() { *dirty = false; } else if err.is_ok() { err = r; } };
         if self.dirty_settings { let r = save("settings.json", &self.settings); run(&mut self.dirty_settings, r); }

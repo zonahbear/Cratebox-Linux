@@ -38,7 +38,8 @@ src/rekordbox.rs   export.pdb + ANLZ readers, XML (crate-digger layouts)
 src/midi.rs        controller profiles, table-driven MIDI engine, LEDs, MIDI learn
 src/maps.rs        GENERATED from the web app's MIXXX_MAPS; don't hand-edit (regenerate instead)
 src/midi_io.rs audio_io.rs   midir / cpal device handling (rescans, "no output" timer mode)
-src/store.rs       JSON persistence in ~/.local/share/cratebox ($XDG_DATA_HOME, or $CRATEBOX_DATA)
+src/store.rs       JSON persistence in ~/.local/share/cratebox ($XDG_DATA_HOME, or $CRATEBOX_DATA); the 1 s saves
+                   write on a "cratebox-save" thread (flush_bg), flush() drains it then writes inline
 src/ring.rs        lock-free ring buffer
 src/fx.rs          Beat FX / Pad FX DSP (FxUnit: one per channel insert + master), port of the iOS FxUnit
 src/beatfx.rs      BEAT FX unit + PAD FX state on the UI thread; sends beat clocks every 100 ms
@@ -49,6 +50,7 @@ src/uitest.rs      scripted UI driver: CRATEBOX_UITEST=script.json, output to CR
 tests/analysis.rs  analysis accuracy on synthetic tracks
 tests/app.rs       whole app end-to-end with FLX4 MIDI messages, persistence
 tests/ui.rs        real window under Xvfb (skipped without xvfb-run)
+CHANGELOG.md       human-readable "what's new" for Jonah: add a line per user-facing PR
 docs/keyboard.md   keyboard + trackpad shortcuts (same list as ui.rs SHORTCUTS, the F12 window)
 tests/four.rs      4 decks end-to-end: channel 3, sync, layer buttons, FX, REC, HEAT simulator → PUFF
 tests/make_tracks.py   synthetic test tracks → tests/music (same script as the web repo)
@@ -122,6 +124,7 @@ distro/            Cratebox OS ISO: build-iso.sh remasters Lubuntu 26.04.1 (laye
   (evidence for the "bar 1 half a bar late" report; synthetic tests are all on bar 1, so tuning needs real tracks).
 - rekordbox is read-only here: never writes to a stick (the web app's playlist writer isn't ported).
 - Binary refuses to run on CPUs without AVX2/FMA/BMI2 and says how to rebuild.
+- CRATEBOX_PROFILE=1 prints UI frame times (avg/worst) every 5 s (ui.rs FrameProf).
 - `build-release.sh` links with `--allow-shlib-undefined` on purpose (user's own libasound at run time).
 
 ## Open work (update this when it changes)

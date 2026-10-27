@@ -2111,6 +2111,7 @@ fn short_fx(fx: FxKind) -> &'static str {
 
 impl eframe::App for Gui {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        let _prof = FrameProf(std::time::Instant::now());
         self.frames += 1;
         self.app.poll();
         if std::env::var("CRATEBOX_DEMO").is_ok() { self.demo(); }
@@ -2231,3 +2232,26 @@ fn db_text(g: f64) -> String { if g <= 1e-4 { "-∞".into() } else { format!("{:
 
 /// a network rate: "820 kbps", "12.4 Mbps"
 fn rate_text(bytes_s: f64) -> String { let kb = bytes_s * 8.0 / 1000.0; if kb >= 1000.0 { format!("{:.1} Mbps", kb / 1000.0) } else { format!("{:.0} kbps", kb) } }
+
+/// CRATEBOX_PROFILE=1: prints the UI thread's average and worst time per frame every 5 s (stderr)
+struct FrameProf(std::time::Instant);
+impl Drop for FrameProf {
+    fn drop(&mut self) {
+        use std::sync::atomic::{AtomicU64, Ordering::Relaxed};
+        static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+        if !*ON.get_or_init(|| std::env::var_os("CRATEBOX_PROFILE").is_some()) { return; }
+        static SUM: AtomicU64 = AtomicU64::new(0);
+        static N: AtomicU64 = AtomicU64::new(0);
+        static MAX: AtomicU64 = AtomicU64::new(0);
+        static BASE: std::sync::OnceLock<std::time::Instant> = std::sync::OnceLock::new();
+        static LAST_MS: AtomicU64 = AtomicU64::new(0);
+        let us = self.0.elapsed().as_micros() as u64;
+        SUM.fetch_add(us, Relaxed); N.fetch_add(1, Relaxed); MAX.fetch_max(us, Relaxed);
+        let now_ms = BASE.get_or_init(std::time::Instant::now).elapsed().as_millis() as u64;
+        if now_ms - LAST_MS.load(Relaxed) >= 5000 {
+            LAST_MS.store(now_ms, Relaxed);
+            let n = N.swap(0, Relaxed);
+            eprintln!("cratebox frame: {} frames, avg {:.2} ms, worst {:.2} ms (UI thread, before drawing)", n, SUM.swap(0, Relaxed) as f64 / n.max(1) as f64 / 1000.0, MAX.swap(0, Relaxed) as f64 / 1000.0);
+        }
+    }
+}
