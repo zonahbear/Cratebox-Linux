@@ -93,6 +93,9 @@ conf=/etc/bluetooth/main.conf
 if grep -q '^#\? *JustWorksRepairing' "$conf"; then sed -i 's/^#\? *JustWorksRepairing *=.*/JustWorksRepairing = always/' "$conf"
 else sed -i '/^\[General\]/a JustWorksRepairing = always' "$conf"; fi
 grep -qx 'JustWorksRepairing = always' "$conf"
+# controller powered on at boot (Wi-Fi is on by default in NetworkManager)
+if grep -q '^#\? *AutoEnable' "$conf"; then sed -i 's/^#\? *AutoEnable *=.*/AutoEnable=true/' "$conf"
+else sed -i '/^\[Policy\]/a AutoEnable=true' "$conf"; fi
 systemctl enable bluetooth.service
 
 # Faster boot: nothing waits for the network before the session starts, and GRUB never stops on

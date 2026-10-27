@@ -11,6 +11,10 @@
 was=$(powerprofilesctl get 2>/dev/null)
 powerprofilesctl set performance 2>/dev/null
 xset s off -dpms
+# Wi-Fi and Bluetooth on (they stay off if a previous session or the airplane key left them off)
+rfkill unblock wifi bluetooth 2>/dev/null
+nmcli radio wifi on 2>/dev/null
+bluetoothctl power on >/dev/null 2>&1 &
 openbox --config-file /usr/share/cratebox-os/openbox-rc.xml &
 ob=$!
 cratebox --kiosk

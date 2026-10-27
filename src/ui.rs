@@ -120,7 +120,7 @@ impl Gui {
             pill(ui, &format!("{out} · {ch} ch"), self.app.audio.running() && ch >= 4).on_hover_text(&self.app.hp_note);
             ui.add_space(4.0);
             let st = self.app.status_text().to_string();
-            let right_w = 470.0 + 40.0 + 130.0 + if self.battery.1.is_some() { 130.0 } else { 0.0 };
+            let right_w = 470.0 + 40.0 + 130.0 + 110.0 + if self.battery.1.is_some() { 130.0 } else { 0.0 };
             ui.add_sized(vec2((ui.available_width() - right_w).max(40.0), 20.0), egui::Label::new(egui::RichText::new(st).color(MUTED).size(11.5)).truncate());
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                 let lv = [level(self.app.status_snap.master_meter[0]), level(self.app.status_snap.master_meter[1])];
@@ -156,6 +156,16 @@ impl Gui {
                 let r = button(ui, "LIB", vec2(36.0, 22.0), lib, FG, 11.5).on_hover_text("Show or close the library under the decks (closed: scroll to pop it up)");
                 self.reg("lib", r.rect);
                 if r.clicked() { self.app.store.settings.lib_hidden = lib; self.app.store.dirty_settings = true; }
+                // quick launchers: sandboxed Firefox (cratebox-firefox, from os-files) and the file manager
+                let r = button(ui, "FIREFOX", vec2(58.0, 22.0), false, FG, 11.5).on_hover_text("Firefox in a sandbox (its own home, can't see your files)");
+                self.reg("firefox", r.rect);
+                if r.clicked() { let _ = std::process::Command::new("cratebox-firefox").spawn().or_else(|_| std::process::Command::new("firefox").spawn()); }
+                let r = button(ui, "FILES", vec2(44.0, 22.0), false, FG, 11.5).on_hover_text("Open the file manager");
+                self.reg("files", r.rect);
+                if r.clicked() {
+                    let home = dirs::home_dir().unwrap_or_default();
+                    let _ = std::process::Command::new("pcmanfm-qt").arg(&home).spawn().or_else(|_| std::process::Command::new("xdg-open").arg(&home).spawn());
+                }
                 let rec = self.app.rec.as_ref().map(|r| r.seconds());
                 let label = match rec { Some(s) => format!("● {}:{:02}", s as u64 / 60, s as u64 % 60), None => "● REC".into() };
                 let r = button(ui, &label, vec2(62.0, 22.0), rec.is_some(), RED, 11.5).on_hover_text("Record the master to a WAV file (Settings → Sound says where)");
