@@ -1729,7 +1729,7 @@ impl Gui {
                     if down != self.hitting { self.hitting = down; self.app.heat.hit(if down { 1.0 } else { 0.0 }); }
                 }
             }
-            ui.label(egui::RichText::new("Beat FX → PUFF (on offer while a Puffco or the simulator is connected). A harder hit drops the bowl temperature further, and the warble gets deeper and faster. LEVEL caps it.").size(10.5).color(MUTED));
+            ui.label(egui::RichText::new("Beat FX → PUFF (on offer while a Puffco or the simulator is connected). It plays like a theremin: a harder hit drops the bowl temperature further, and the voice glides higher (up to two octaves) and louder over a tape warble. LEVEL caps it.").size(10.5).color(MUTED));
             if !v.msg.is_empty() { ui.label(egui::RichText::new(&v.msg).size(12.0)); }
             // ---- curves from TrueCurve
             ui.separator();
