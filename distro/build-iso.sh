@@ -82,6 +82,14 @@ find "$S" -type c | while read -r w; do
         rm "$w" && mkdir "$w" && echo "whiteout over a directory replaced: ${w#"$S"}"
     fi
 done
+# A whiteout over a file (e.g. the stock cs420x module the speaker driver replaces) gets copied to the disk
+# as a 0,0 character device, and depmod then fails on it (Jonah, 2026-10-27). rsync can't delete, so list
+# them; cratebox-rt-users removes them on the installed system's first boot (live: overlayfs hides them).
+mkdir -p "$S/usr/share/cratebox-os"
+find "$S" -type c | while read -r w; do
+    [ "$(stat -c %t,%T "$w")" = 0,0 ] && echo "/${w#"$S"/}"
+done > "$S/usr/share/cratebox-os/whiteouts"
+echo "file whiteouts listed: $(wc -l < "$S/usr/share/cratebox-os/whiteouts")"
 "$here/merge-dpkg-status.py" "$work/standard.status.orig" "$S/var/lib/dpkg/status" "$L/var/lib/dpkg/status" "$work/live.status"
 cp "$work/live.status" "$L/var/lib/dpkg/status"
 
