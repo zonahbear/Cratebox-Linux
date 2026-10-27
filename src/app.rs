@@ -60,6 +60,9 @@ pub struct UiState {
 pub struct App {
     /// tracks loaded so far (the pop-up browser closes when this moves)
     pub loads: u64,
+    /// GLOW (the Puffco lantern following the music) and whether it was sending last frame
+    pub glow: crate::heat::Glow,
+    glow_was: bool,
     pub tx: Sender<Cmd>,
     pub shared: Shared,
     pub status_snap: Status,
@@ -177,7 +180,7 @@ impl App {
             jobs_tx, jobs_rx, queue: VecDeque::new(), analysing: None, analysed_count: 0, deck_loads: Arc::new(AtomicUsize::new(0)),
             midi: midi::Engine::new(), midi_io: MidiIo::new(), last_keep: Instant::now(), last_led: Instant::now(),
             status: String::new(), status_until: Instant::now(), progress: String::new(), outputs, ui: UiState::default(), last_flush: Instant::now(),
-            repaint: None, copying: None, midi_query: vec![], rec_armed: false, loads: 0, sync_held: [None; DECKS], downloads: (Instant::now(), None), hp_note: String::new(), reconnect: None, scanning: 0,
+            repaint: None, copying: None, midi_query: vec![], rec_armed: false, loads: 0, glow: crate::heat::Glow::new(), glow_was: false, sync_held: [None; DECKS], downloads: (Instant::now(), None), hp_note: String::new(), reconnect: None, scanning: 0,
         };
         app.midi.use_profile("learn", vec![]);
         app.midi.four = app.store.settings.four;
@@ -544,6 +547,20 @@ impl App {
             let _ = tx.send(Job::Say(format!("Grids vs rekordbox ({n} tracks, same tempo): bar 1 matches on {}, 1 beat late on {}, half a bar off on {}, 1 beat early on {}. Details in grid-compare.log", off[0], off[1], off[2], off[3]), 20.0));
             if let Some(w) = wake { w(); }
         });
+    }
+    /// GLOW: the lantern's colour from the master level and the FX knob, to the HEAT worker (which sends it
+    /// between heat runs only); off again when GLOW is switched off or the Puffco goes
+    fn glow_tick(&mut self) {
+        let on = self.store.settings.heat_glow && self.heat.view.connected;
+        if !on {
+            if self.glow_was { self.heat.glow(None); self.glow.reset(); self.glow_was = false; }
+            return;
+        }
+        self.glow_was = true;
+        use crate::heat::GlowKnob;
+        let what = match self.store.settings.heat_glow_knob.as_str() { "speed" => GlowKnob::Speed, "sensitivity" => GlowKnob::Sensitivity, "off" => GlowKnob::Off, _ => GlowKnob::Intensity };
+        let m = self.status_snap.master_meter;
+        if let Some(c) = self.glow.tick(m[0].max(m[1]) as f64, self.fx.depth, what) { self.heat.glow(Some(c)); }
     }
     /// stop every deck (battery critical)
     pub fn stop_all(&mut self) {
@@ -1163,6 +1180,7 @@ impl App {
         }
         // HEAT: the worker's view, PUFF amounts into the BEAT FX unit, learned models and the device to remember
         self.heat.poll();
+        self.glow_tick();
         while let Ok(e) = self.heat.events.try_recv() {
             match e {
                 crate::heat::Event::Connected(c) => {

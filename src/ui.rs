@@ -1852,6 +1852,27 @@ impl Gui {
             }
             ui.label(egui::RichText::new("Beat FX → PUFF (on offer while a Puffco or the simulator is connected). It plays like a theremin: a harder hit drops the bowl temperature further, and the voice glides higher (up to two octaves) and louder over a tape warble. LEVEL caps it.").size(10.5).color(MUTED));
             if !v.msg.is_empty() { ui.label(egui::RichText::new(&v.msg).size(12.0)); }
+            // ---- GLOW: the lantern as a slow rainbow that breathes with the music
+            ui.separator();
+            ui.horizontal(|ui| {
+                let mut on = self.app.store.settings.heat_glow;
+                if ui.checkbox(&mut on, egui::RichText::new("GLOW").font(bold(12.5))).on_hover_text("The Puffco's lantern drifts through the rainbow and brightens with the music. Paused during a heat run").changed() {
+                    self.app.store.settings.heat_glow = on; self.app.store.dirty_settings = true;
+                }
+                let k = self.app.store.settings.heat_glow_knob.clone();
+                let name = |k: &str| match k { "speed" => "speed", "sensitivity" => "sensitivity", "off" => "nothing", _ => "brightness" };
+                ui.label(egui::RichText::new("FX knob sets").size(11.5).color(MUTED));
+                let mut nk = k.clone();
+                egui::ComboBox::from_id_salt("glow_knob").width(96.0).selected_text(name(&k)).show_ui(ui, |ui| {
+                    for x in ["intensity", "speed", "sensitivity", "off"] { ui.selectable_value(&mut nk, x.to_string(), name(x)); }
+                });
+                if nk != k { self.app.store.settings.heat_glow_knob = nk; self.app.store.dirty_settings = true; }
+                if on && v.connected {
+                    let c = self.app.glow.shown();
+                    let (r, _) = ui.allocate_exact_size(vec2(16.0, 16.0), Sense::hover());
+                    ui.painter().circle_filled(r.center(), 7.0, Color32::from_rgb(c[0], c[1], c[2]));
+                }
+            });
             // ---- curves from TrueCurve
             ui.separator();
             ui.label(egui::RichText::new("Curves from TrueCurve: press \"Copy curves for Cratebox\" there, paste here").size(11.0).color(MUTED));
