@@ -1,0 +1,19 @@
+#!/bin/sh
+# Keyboard backlight on the MacBook (applespi: /sys/class/leds/spi::kbd_backlight).
+# cratebox-kbdlight up | down | off | max | <percent>. Goes through logind, so no root is needed in a
+# desktop session; the Fn+F5 / Fn+F6 keys run it (Cratebox session: openbox-rc.xml).
+led=$(ls -d /sys/class/leds/*kbd_backlight* 2>/dev/null | head -n1)
+[ -n "$led" ] || { echo "No keyboard backlight found (is applespi loaded?)" >&2; exit 1; }
+max=$(cat "$led/max_brightness"); cur=$(cat "$led/brightness"); step=$(( max / 10 )); [ "$step" -gt 0 ] || step=1
+case "${1:-up}" in
+    up) new=$(( cur + step ));;
+    down) new=$(( cur - step ));;
+    off) new=0;;
+    max) new=$max;;
+    *[!0-9]*) echo "usage: cratebox-kbdlight up|down|off|max|PERCENT" >&2; exit 2;;
+    *) new=$(( max * $1 / 100 ));;
+esac
+[ "$new" -lt 0 ] && new=0
+[ "$new" -gt "$max" ] && new=$max
+busctl call org.freedesktop.login1 /org/freedesktop/login1/session/auto org.freedesktop.login1.Session \
+    SetBrightness ssu leds "$(basename "$led")" "$new" 2>/dev/null || echo "$new" > "$led/brightness"
