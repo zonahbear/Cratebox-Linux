@@ -2,6 +2,13 @@
 
 Newest first. Each update arrives through `cratebox-update` (no new ISO needed) unless it says "Cratebox OS".
 
+## 27 October 2026 (evening)
+
+- Scrolling waveforms move by an exact amount every screen refresh, so they glide instead of shuffling,
+  and they no longer wobble when the sound card's reported delay changes.
+- Settings → Look → "Show frame rate in the header": shows frames per second and missed screen
+  refreshes (60 FPS · 0 MISSED is smooth), so a stutter can be pinned on the screen or on Cratebox.
+
 ## 27 October 2026
 
 **Smoother while you play**

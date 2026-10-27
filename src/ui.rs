@@ -229,7 +229,8 @@ impl Gui {
                 ui.add_space(4.0);
                 // two small lines: CPU + memory over network rates, Wi-Fi signal and Bluetooth
                 let (wt, wc) = match self.sys.wifi { Some(q) => (format!("WI-FI {q}%"), if q < 30 { RED } else { MUTED() }), None => ("WI-FI OFF".into(), RED) };
-                let l1 = format!("CPU {:.0}% · {} MB · BT {}", self.sys.cpu, self.sys.mem_mb, if self.sys.bt { "ON" } else { "OFF" });
+                let mut l1 = format!("CPU {:.0}% · {} MB · BT {}", self.sys.cpu, self.sys.mem_mb, if self.sys.bt { "ON" } else { "OFF" });
+                if self.app.store.settings.show_fps { if let Ok(f) = FRAME_STATS.lock() { if !f.is_empty() { l1 = format!("{f} · {l1}"); } } }
                 let l2 = format!("↓{} ↑{} · {wt}", rate_text(self.sys.down), rate_text(self.sys.up));
                 let (c1, c2) = (if self.sys.cpu >= 85.0 || !self.sys.bt { RED } else { MUTED() }, wc);
                 ui.with_layout(Layout::top_down(Align::Max), |ui| {
@@ -1369,6 +1370,7 @@ impl Gui {
                     if r.changed() { self.app.store.dirty_settings = true; }
                     r.on_hover_text("Cratebox already allows for the sound card's delay. If the waveform still runs ahead of what you hear, move this up; if it trails, move it down");
                 });
+                if ui.checkbox(&mut self.app.store.settings.show_fps, "Show frame rate in the header").on_hover_text("Frames per second and missed screen refreshes over the last 5 s: 60 FPS · 0 MISSED is smooth").changed() { self.app.store.dirty_settings = true; }
                 if ui.checkbox(&mut self.app.store.settings.browse_close_on_load, "Back to the decks after loading a track from BROWSE").changed() { self.app.store.dirty_settings = true; }
                 ui.label(egui::RichText::new("Music folders").strong());
                 for f in self.app.store.settings.folders.clone() {
@@ -2112,6 +2114,7 @@ fn short_fx(fx: FxKind) -> &'static str {
 impl eframe::App for Gui {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         let _prof = FrameProf(std::time::Instant::now());
+        crate::deck::frame_tick();
         self.frames += 1;
         self.app.poll();
         if std::env::var("CRATEBOX_DEMO").is_ok() { self.demo(); }
@@ -2233,25 +2236,39 @@ fn db_text(g: f64) -> String { if g <= 1e-4 { "-∞".into() } else { format!("{:
 /// a network rate: "820 kbps", "12.4 Mbps"
 fn rate_text(bytes_s: f64) -> String { let kb = bytes_s * 8.0 / 1000.0; if kb >= 1000.0 { format!("{:.1} Mbps", kb / 1000.0) } else { format!("{:.0} kbps", kb) } }
 
-/// CRATEBOX_PROFILE=1: prints the UI thread's average and worst time per frame every 5 s (stderr)
+/// frame timing, summed every 5 s for the header readout; CRATEBOX_PROFILE=1 also prints the frame rate, missed refreshes and the UI thread's time per frame (stderr)
 struct FrameProf(std::time::Instant);
+/// the last 5 s of FrameProf, for the header (Settings → Look → Show frame rate)
+static FRAME_STATS: std::sync::Mutex<String> = std::sync::Mutex::new(String::new());
 impl Drop for FrameProf {
     fn drop(&mut self) {
         use std::sync::atomic::{AtomicU64, Ordering::Relaxed};
-        static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-        if !*ON.get_or_init(|| std::env::var_os("CRATEBOX_PROFILE").is_some()) { return; }
         static SUM: AtomicU64 = AtomicU64::new(0);
         static N: AtomicU64 = AtomicU64::new(0);
         static MAX: AtomicU64 = AtomicU64::new(0);
         static BASE: std::sync::OnceLock<std::time::Instant> = std::sync::OnceLock::new();
         static LAST_MS: AtomicU64 = AtomicU64::new(0);
+        static PREV_US: AtomicU64 = AtomicU64::new(0);
+        static LATE: AtomicU64 = AtomicU64::new(0);
+        static GAP: AtomicU64 = AtomicU64::new(0);
         let us = self.0.elapsed().as_micros() as u64;
         SUM.fetch_add(us, Relaxed); N.fetch_add(1, Relaxed); MAX.fetch_max(us, Relaxed);
-        let now_ms = BASE.get_or_init(std::time::Instant::now).elapsed().as_millis() as u64;
+        let base = BASE.get_or_init(std::time::Instant::now);
+        // frame to frame: at 60 Hz a frame every 16.7 ms; a gap over 25 ms is a missed refresh (a visible hitch)
+        let start_us = self.0.duration_since(*base).as_micros() as u64;
+        let prev = PREV_US.swap(start_us, Relaxed);
+        if prev > 0 && start_us > prev { let gap = start_us - prev; GAP.fetch_max(gap, Relaxed); if gap > 25_000 { LATE.fetch_add(1, Relaxed); } }
+        let now_ms = base.elapsed().as_millis() as u64;
         if now_ms - LAST_MS.load(Relaxed) >= 5000 {
-            LAST_MS.store(now_ms, Relaxed);
+            let secs = (now_ms - LAST_MS.swap(now_ms, Relaxed)) as f64 / 1000.0;
             let n = N.swap(0, Relaxed);
-            eprintln!("cratebox frame: {} frames, avg {:.2} ms, worst {:.2} ms (UI thread, before drawing)", n, SUM.swap(0, Relaxed) as f64 / n.max(1) as f64 / 1000.0, MAX.swap(0, Relaxed) as f64 / 1000.0);
+            let (fps, late, gap) = (n as f64 / secs, LATE.swap(0, Relaxed), GAP.swap(0, Relaxed) as f64 / 1000.0);
+            let (avg, worst) = (SUM.swap(0, Relaxed) as f64 / n.max(1) as f64 / 1000.0, MAX.swap(0, Relaxed) as f64 / 1000.0);
+            if let Ok(mut s) = FRAME_STATS.lock() { *s = format!("{fps:.0} FPS · {late} MISSED"); }
+            static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+            if *ON.get_or_init(|| std::env::var_os("CRATEBOX_PROFILE").is_some()) {
+                eprintln!("cratebox frame: {fps:.1} fps, {late} missed refreshes, longest gap {gap:.1} ms; UI work avg {avg:.2} ms, worst {worst:.2} ms");
+            }
         }
     }
 }

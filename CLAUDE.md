@@ -124,7 +124,8 @@ distro/            Cratebox OS ISO: build-iso.sh remasters Lubuntu 26.04.1 (laye
   (evidence for the "bar 1 half a bar late" report; synthetic tests are all on bar 1, so tuning needs real tracks).
 - rekordbox is read-only here: never writes to a stick (the web app's playlist writer isn't ported).
 - Binary refuses to run on CPUs without AVX2/FMA/BMI2 and says how to rebuild.
-- CRATEBOX_PROFILE=1 prints UI frame times (avg/worst) every 5 s (ui.rs FrameProf).
+- Waveforms are timed by deck::frame_tick/frame_time (whole refresh intervals, not wall clock at update()); App eases
+  vis_delay. Settings → Look → Show frame rate puts FPS/missed refreshes in the header; CRATEBOX_PROFILE=1 also logs them.
 - `build-release.sh` links with `--allow-shlib-undefined` on purpose (user's own libasound at run time).
 
 ## Open work (update this when it changes)

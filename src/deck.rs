@@ -12,6 +12,43 @@ use std::sync::mpsc::Sender;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
+thread_local! {
+    /// the UI thread's frame clock (seconds): (time of this frame, last real start, refresh interval
+    /// estimate, recent intervals); see `frame_tick`
+    static FRAME: std::cell::RefCell<(f64, f64, f64, Vec<f64>)> = const { std::cell::RefCell::new((-1.0, -1.0, 1.0 / 60.0, Vec::new())) };
+}
+fn clock_base() -> Instant { static B: std::sync::OnceLock<Instant> = std::sync::OnceLock::new(); *B.get_or_init(Instant::now) }
+/// call once at the start of every UI frame. With vsync each frame is shown exactly one (or a whole number
+/// of) refresh intervals after the last, but the moment `update` starts wobbles by a few ms with whatever
+/// else the frame did; timing the waveforms from that start made them advance unevenly (judder at high
+/// zoom). So the frame time steps in whole refresh intervals and only eases towards the wall clock.
+pub fn frame_tick() {
+    let now = clock_base().elapsed().as_secs_f64();
+    FRAME.with(|f| {
+        let (t, last, iv, hist) = &mut *f.borrow_mut();
+        if *last >= 0.0 {
+            let dt = now - *last;
+            if (0.004..0.05).contains(&dt) {
+                hist.push(dt);
+                if hist.len() > 31 { hist.remove(0); }
+                let mut h = hist.clone();
+                h.sort_by(|a, b| a.total_cmp(b));
+                *iv = h[h.len() / 2];
+            }
+        }
+        *last = now;
+        if *t < 0.0 || (now - *t).abs() > 0.1 { *t = now; return; }
+        let n = ((now - *t) / *iv).round().max(1.0);
+        *t += n * *iv;
+        *t += (now - *t) * 0.05;
+    });
+}
+/// this frame's time for drawing (the wall clock where `frame_tick` isn't called, e.g. tests)
+pub fn frame_time() -> f64 {
+    let t = FRAME.with(|f| f.borrow().0);
+    if t >= 0.0 { t } else { clock_base().elapsed().as_secs_f64() }
+}
+
 pub const RANGES: [f64; 4] = [6.0, 10.0, 16.0, 100.0];
 pub const LOOP_SIZES: [f64; 8] = [0.25, 0.5, 1.0, 2.0, 4.0, 8.0, 16.0, 32.0];
 pub const JUMPS: [f64; 8] = [-1.0, 1.0, -2.0, 2.0, -4.0, 4.0, -8.0, 8.0];
@@ -81,7 +118,7 @@ pub struct Deck {
     pos: f64,
     pos_t: Instant,
     /// the waveform's own clock: follows `now()` smoothly instead of jumping with each audio report
-    vis: std::cell::Cell<(f64, Instant)>,
+    vis: std::cell::Cell<(f64, f64)>,
     /// how far the drawn position sits behind `now()` (output latency + Settings offset - a frame), seconds
     pub vis_delay: f64,
     speed: f64,
@@ -133,7 +170,7 @@ impl Deck {
     pub fn new(i: usize, tx: Sender<Cmd>) -> Deck {
         let now = Instant::now();
         Deck {
-            i, tx, track: None, ana: None, duration: 0.0, sr: 44100.0, pos: 0.0, pos_t: now, vis: std::cell::Cell::new((0.0, now)), vis_delay: 0.0, speed: 0.0, playing: false, pitch: 0.0, range_idx: 0,
+            i, tx, track: None, ana: None, duration: 0.0, sr: 44100.0, pos: 0.0, pos_t: now, vis: std::cell::Cell::new((0.0, frame_time())), vis_delay: 0.0, speed: 0.0, playing: false, pitch: 0.0, range_idx: 0,
             sync: false, sync_since: now, sync_rate: 1.0, sync_mult: 1.0, sync_trim: 0.0, sync_with: None, sync_track: 0, phase_err: None, has_master: false, cue: 0.0, hot: [None; 8], lp: Loop::default(), quant: true,
             pad_mode: PadMode::HotCue, previewing: false, touch: false, loading: false, loop_in_down: None, sent_rate: None, coasting: false,
             coast_hold: now, started_at: None, mt: true, locked: false, seek_seq: 0, taps: vec![], mono: None, rephrase_gen: 0, rephrase_at: None,
@@ -184,10 +221,11 @@ impl Deck {
         // what's heard when this frame reaches the screen, not what was just rendered
         let raw = (self.now() - self.vis_delay * self.speed).clamp(0.0, self.duration.max(0.0));
         let (vt, va) = self.vis.get();
-        let pred = vt + va.elapsed().as_secs_f64() * self.speed;
+        let ft = frame_time();
+        let pred = vt + (ft - va) * self.speed;
         let err = raw - pred;
         let out = if self.speed == 0.0 || err.abs() > 0.04 { raw } else { pred + err * 0.1 };
-        self.vis.set((out, Instant::now()));
+        self.vis.set((out, ft));
         out
     }
     pub fn beat_at(&self, t: f64) -> f64 { match &self.ana { Some(a) => (t - a.first_beat) / self.spb(), None => 0.0 } }
