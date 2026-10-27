@@ -466,6 +466,11 @@ mod bluez {
                 Err(e) => Err(format!("couldn't start a Bluetooth scan ({e})")),
             }
         }
+        /// forget a device (BlueZ RemoveDevice): drops a stale or half-made bond so the next try pairs fresh
+        pub fn forget(&self, path: &str) {
+            let Ok(a) = self.proxy(self.adapter.as_str(), "org.bluez.Adapter1") else { return };
+            if let Ok(p) = zbus::zvariant::ObjectPath::try_from(path) { let _: Result<(), _> = a.call("RemoveDevice", &(p,)); }
+        }
         pub fn stop_scan(&self) { if let Ok(a) = self.proxy(self.adapter.as_str(), "org.bluez.Adapter1") { let _: Result<(), _> = a.call("StopDiscovery", &()); } }
         /// every device BlueZ knows on this adapter (bonded ones too, even when they're not advertising)
         pub fn devices(&self) -> Vec<Seen> {
@@ -524,6 +529,13 @@ mod bluez {
                 say("Pairing…");
                 if let Err(e) = dev.call::<_, _, ()>("Pair", &()) {
                     let e = e.to_string();
+                    // a Puffco only accepts a new bond in pairing mode; anything else leaves BlueZ with a
+                    // half-made pairing that makes the next try fail too, so forget it straight away
+                    if e.contains("AuthenticationFailed") || e.contains("AuthenticationRejected") || e.contains("AuthenticationCanceled") {
+                        let _: Result<(), _> = dev.call("Disconnect", &());
+                        bus.forget(&seen.path);
+                        return Err(format!("{} wouldn't pair. Put it in pairing mode first (it only takes a new pairing then), then scan and connect again", seen.name));
+                    }
                     // already paired from the other side is fine; anything else is worth knowing about
                     if !e.contains("AlreadyExists") { pair_err = Some(e); }
                 }
@@ -562,6 +574,12 @@ mod bluez {
             }
             if why != "ok" {
                 me.disconnect();
+                // the bond is stale (the Puffco paired with a phone since, or was reset): forget our half so the
+                // next try starts clean
+                if auth_problem(&why) {
+                    me.bus.forget(&seen.path);
+                    return Err(format!("{} has forgotten this computer (it may have paired with your phone since). Put it in pairing mode, then scan and connect again", seen.name));
+                }
                 let pe = pair_err.map(|e| format!(" Pairing said: {e}.")).unwrap_or_default();
                 return Err(if auth_problem(&why) { format!("it wouldn't pair ({why}).{pe} Forget it in Bluetooth settings (or `bluetoothctl remove {}`), wake it and try again", seen.addr) }
                     else { format!("handshake failed ({why}).{pe} Close the Puffco app (and Cratebox HEAT on your phone): a Puffco talks to one thing at a time") });

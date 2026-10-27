@@ -90,6 +90,13 @@ impl Gui {
         if r.clicked() || r.drag_started() { self.app.learn_pick(action, deck); }
         true
     }
+    /// a pulsing outline in the deck's colour around a deck the controller's hands are on (4 decks only)
+    fn select_glow(&self, ui: &Ui, i: usize, r: Rect) {
+        if self.side_of(i).is_none() { return; }
+        let col = deck_color(i);
+        let a = (strobe(ui.ctx()) * 255.0) as u8;
+        ui.painter().rect_stroke(r, 4.0, Stroke::new(2.0_f32, Color32::from_rgba_unmultiplied(col.r(), col.g(), col.b(), a)), StrokeKind::Inside);
+    }
     /// the controller side (0 left / 1 right) playing deck `i` in 4-deck mode
     fn side_of(&self, i: usize) -> Option<usize> {
         if !self.app.four() || self.app.midi_io.name.is_empty() { return None; }
@@ -113,7 +120,7 @@ impl Gui {
             pill(ui, &format!("{out} · {ch} ch"), self.app.audio.running() && ch >= 4).on_hover_text(&self.app.hp_note);
             ui.add_space(4.0);
             let st = self.app.status_text().to_string();
-            let right_w = 470.0 + 130.0 + if self.battery.1.is_some() { 130.0 } else { 0.0 };
+            let right_w = 470.0 + 40.0 + 130.0 + if self.battery.1.is_some() { 130.0 } else { 0.0 };
             ui.add_sized(vec2((ui.available_width() - right_w).max(40.0), 20.0), egui::Label::new(egui::RichText::new(st).color(MUTED).size(11.5)).truncate());
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                 let lv = [level(self.app.status_snap.master_meter[0]), level(self.app.status_snap.master_meter[1])];
@@ -145,6 +152,10 @@ impl Gui {
                 let r = button(ui, "WAVE", vec2(50.0, 22.0), wave, deck_color(2), 11.5).on_hover_text("Just the waveforms");
                 self.reg("wave", r.rect);
                 if r.clicked() { self.app.store.settings.wave = !wave; self.app.store.dirty_settings = true; }
+                let lib = !self.app.store.settings.lib_hidden;
+                let r = button(ui, "LIB", vec2(36.0, 22.0), lib, FG, 11.5).on_hover_text("Show or close the library under the decks (closed: scroll to pop it up)");
+                self.reg("lib", r.rect);
+                if r.clicked() { self.app.store.settings.lib_hidden = lib; self.app.store.dirty_settings = true; }
                 let rec = self.app.rec.as_ref().map(|r| r.seconds());
                 let label = match rec { Some(s) => format!("● {}:{:02}", s as u64 / 60, s as u64 % 60), None => "● REC".into() };
                 let r = button(ui, &label, vec2(62.0, 22.0), rec.is_some(), RED, 11.5).on_hover_text("Record the master to a WAV file (Settings → Sound says where)");
@@ -183,6 +194,7 @@ impl Gui {
         let wave = Rect::from_min_max(pos2(rect.left(), info.bottom()), pos2(rect.right(), rect.bottom() - ov_h - 1.0));
         let ov = Rect::from_min_max(pos2(rect.left(), wave.bottom() + 1.0), rect.max);
         self.info_strip(ui, i, info);
+        self.select_glow(ui, i, rect);
         // ---- the scrolling waveform: drag to move through the track (audio follows the hand while playing), click to jump
         let r = ui.interact(wave, ui.id().with(("lane", i)), Sense::click_and_drag());
         self.reg(format!("lane{i}"), wave);
@@ -425,6 +437,7 @@ impl Gui {
         let col = deck_color(i);
         ui.painter().rect_filled(r, 5.0, Color32::from_rgb(0x07, 0x09, 0x0c));
         ui.painter().rect_stroke(r, 5.0, Stroke::new(1.0_f32, LINE), StrokeKind::Inside);
+        self.select_glow(ui, i, r);
         let jd = (r.height() - 12.0).min(r.width() * 0.3).max(40.0);
         let jr = if platter_left { Rect::from_min_size(pos2(r.left() + 6.0, r.center().y - jd / 2.0), vec2(jd, jd)) }
             else { Rect::from_min_size(pos2(r.right() - 6.0 - jd, r.center().y - jd / 2.0), vec2(jd, jd)) };
@@ -730,12 +743,10 @@ impl Gui {
             ui.painter().rect_filled(sr, 3.0, PANEL_D);
             let tab_r = Rect::from_min_size(sr.min, vec2(sw, 14.0));
             // 4 decks + controller: only the decks the FLX4's two sides play are lit, with a medium strobe
-            // (2 Hz) so you can see where the hands are; the others stay dim. 2 decks: lit when loaded.
+            // (1.5 Hz) so you can see where the hands are; the others stay dim. 2 decks: lit when loaded.
             let tab_c = if self.app.four() && !self.app.midi_io.name.is_empty() {
                 if self.side_of(i).is_some() {
-                    let t = ui.ctx().input(|x| x.time);
-                    ui.ctx().request_repaint();
-                    let a = 0.35 + 0.65 * (0.5 + 0.5 * (t * std::f64::consts::TAU * 2.0).cos()) as f32;
+                    let a = strobe(ui.ctx());
                     Color32::from_rgba_unmultiplied(col.r(), col.g(), col.b(), (a * 255.0) as u8)
                 } else { Color32::from_rgba_unmultiplied(col.r(), col.g(), col.b(), 40) }
             } else if self.app.decks[i].loaded() { col } else { Color32::from_rgba_unmultiplied(col.r(), col.g(), col.b(), 60) };
@@ -1509,7 +1520,8 @@ impl Gui {
         let sel = self.app.list.sel;
         let moved = sel != self.last_sel && self.last_sel != usize::MAX;
         self.last_sel = sel;
-        if !self.app.store.settings.wave { self.wave_browse = None; return; }
+        let s = &self.app.store.settings;
+        if !(s.wave || (s.lib_hidden && !s.browse)) { self.wave_browse = None; return; }
         if moved { self.wave_browse = Some(std::time::Instant::now()); }
         let Some(t0) = self.wave_browse else { return };
         if t0.elapsed().as_secs_f32() > 6.0 { self.wave_browse = None; return; }
@@ -1731,6 +1743,12 @@ impl Gui {
 
 /// a deck key: (controller side, Some(pad) for a pad key). Left hand plays the left side (deck 1, or 3 in
 /// 4-deck mode after a layer switch), right hand the right side.
+/// the "selected deck" pulse (mixer tabs, lanes, deck screens): 1.5 Hz between 35 % and full
+fn strobe(ctx: &egui::Context) -> f32 {
+    ctx.request_repaint();
+    let t = ctx.input(|x| x.time);
+    0.35 + 0.65 * (0.5 + 0.5 * (t * std::f64::consts::TAU * 1.5).cos()) as f32
+}
 /// CPU % (from /proc/stat between two samples) and memory in use (MemTotal - MemAvailable)
 struct SysStats { at: std::time::Instant, last: (u64, u64), cpu: f32, mem_mb: u64 }
 impl SysStats {
@@ -1860,6 +1878,7 @@ impl eframe::App for Gui {
             let n = shown.len() as f32;
             let s = &self.app.store.settings;
             let (wave, browse) = (s.wave, s.browse);
+            let lib_off = s.lib_hidden && !browse;
             // the deck row keeps its size; dragging the library's top edge trades height between the
             // waveforms and the library (double-click: back to automatic)
             // screen-only decks need less height than buttons: the waveforms get the rest
@@ -1872,6 +1891,7 @@ impl eframe::App for Gui {
             let lib_h = s.lib_h;
             // ---- the waveforms, stacked 1 2 (3 4)
             let lane_h = if wave { (full.height() - (n - 1.0) * GAP) / n }
+                else if lib_off { ((full.height() - row_h - 4.0 - GAP) - n * GAP) / n }
                 else if browse { if four { 40.0 } else { 64.0 } }
                 else if lib_h > 0.0 {
                     let spare = full.height() - row_h - 4.0 - GAP - n * GAP;
@@ -1906,6 +1926,7 @@ impl eframe::App for Gui {
                 if r.drag_stopped() { self.app.store.dirty_settings = true; }
                 if r.double_clicked() { self.app.store.settings.lib_h = 0.0; self.app.store.dirty_settings = true; }
             }
+            if lib_off { return; }
             let lib = Rect::from_min_max(pos2(full.left(), top), full.max);
             let ui = &mut ui.new_child(UiBuilder::new().max_rect(lib).layout(Layout::top_down(Align::Min)));
             self.library(ui);
