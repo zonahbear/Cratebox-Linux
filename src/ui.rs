@@ -805,7 +805,9 @@ impl Gui {
             let r = button(ui, "MST", vec2(32.0, 18.0), mc, CUE, 9.5).on_hover_text("Master in the headphones");
             if !self.learn(ui, &r, "masterCue", -1) && r.clicked() { self.app.mixer.master_cue = !mc; self.app.send_mixer(); }
             let mut x = self.app.mixer.xfader;
-            let w = ui.available_width();
+            // as wide on the right of the knob + MST as they take on the left, so its middle is the mixer's middle
+            let used = ui.min_rect().right() - xr.left() + ui.spacing().item_spacing.x;
+            let w = (xr.width() - 2.0 * used).max(60.0);
             let r = hslider(ui, &mut x, vec2(w, 18.0), frozen).on_hover_text("Crossfader: 1 and 3 left, 2 and 4 right (double-click: centre)");
             if !self.learn(ui, &r, "xfader", -1) && r.changed() { self.app.mixer.xfader = x; self.app.send_mixer(); }
         }

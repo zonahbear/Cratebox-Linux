@@ -909,7 +909,7 @@ impl App {
                     "mid" => { self.mixer.mid[d] = v; self.send_mixer(); }
                     "low" => { self.mixer.low[d] = v; self.send_mixer(); }
                     "cfx" => { self.mixer.cfx[d] = v; self.send_mixer(); }
-                    "xfader" => { self.mixer.xfader = v; self.send_mixer(); }
+                    "xfader" => { self.mixer.xfader = if (v - 0.5).abs() < 0.02 { 0.5 } else { v }; self.send_mixer(); } // 64/127 is the hardware middle: snap it
                     "headMix" => { self.mixer.head_mix = v; self.send_mixer(); }
                     "master" => { self.mixer.master = v; self.send_mixer(); }
                     "fxDepth" => self.fx_depth(val),
