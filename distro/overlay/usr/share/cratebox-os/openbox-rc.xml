@@ -6,6 +6,9 @@
   <keyboard>
     <keybind key="A-F4"><action name="Close"/></keybind>
     <keybind key="C-A-q"><action name="Close"/></keybind>
+    <!-- Command+Shift X / . = bar 1 here on the left / right deck (the app can't see the Command key) -->
+    <keybind key="W-S-x"><action name="Execute"><command>cratebox --cmd beat1 left</command></action></keybind>
+    <keybind key="W-S-period"><action name="Execute"><command>cratebox --cmd beat1 right</command></action></keybind>
   </keyboard>
   <mouse/>
   <applications>

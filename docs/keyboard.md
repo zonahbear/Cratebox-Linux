@@ -13,6 +13,7 @@ F12 in the app shows this list. Deck keys follow the controller's sides: the lef
 | F | ; | Loop ×2 |
 | C | . | Beat jump back 4 |
 | V | / | Beat jump on 4 |
+| ⌘⇧X (Ctrl+Shift+X) | ⌘⇧. (Ctrl+Shift+.) | Bar 1 at the playhead (beat grid) |
 | 1 2 3 4 / Q W E R | 7 8 9 0 / U I O P | Pads 1-8 in the current pad mode (PAD FX: held; Shift: delete hot cue) |
 | ` | \ | Layer: left side 1 ⇄ 3, right side 2 ⇄ 4 (4 DECKS) |
 

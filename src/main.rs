@@ -86,6 +86,12 @@ fn main() -> eframe::Result<()> {
         std::process::exit(1);
     }
     if args.iter().any(|a| a == "--version" || a == "-V") { println!("cratebox {}", env!("CARGO_PKG_VERSION")); return Ok(()); }
+    // --cmd WORDS…: hand a command to the running Cratebox and quit (window-manager shortcuts use this)
+    if let Some(i) = args.iter().position(|a| a == "--cmd") {
+        let cmd = args[i + 1..].join(" ");
+        if let Err(e) = cratebox::remote::send(&cmd) { eprintln!("cratebox --cmd: Cratebox isn't running? ({e})"); std::process::exit(1); }
+        return Ok(());
+    }
     // --screenshot FILE [FRAMES]: render, save a PNG and quit (used by the tests)
     let shot = args.iter().position(|a| a == "--screenshot").and_then(|i| args.get(i + 1).map(|p| (std::path::PathBuf::from(p), args.get(i + 2).and_then(|n| n.parse().ok()).unwrap_or(90u64))));
     fix_display_env();
