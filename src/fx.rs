@@ -85,6 +85,9 @@ pub struct FxSlot {
     pub modv: f64,
     mod_s: f64,
     lfo: f64,
+    /// PUFF's theremin voice: its phase and gliding pitch (Hz)
+    th_ph: f64,
+    th_f: f64,
     g: f64,
     in_g: f64,
     /// on, or still ringing out
@@ -110,7 +113,7 @@ impl FxSlot {
     fn new(sr: f64) -> FxSlot {
         let n = (FX_HIST * sr).ceil() as usize;
         FxSlot {
-            sr, fx: None, on: false, beats: 0.5, depth: 0.6, modv: 0.0, mod_s: 0.0, lfo: 0.0, g: 0.0, in_g: 0.0, active: false,
+            sr, fx: None, on: false, beats: 0.5, depth: 0.6, modv: 0.0, mod_s: 0.0, lfo: 0.0, th_ph: 0.0, th_f: 220.0, g: 0.0, in_g: 0.0, active: false,
             dl: vec![0.0; n], dr: vec![0.0; n], w: 0, fl: [0.0; 4], fr: [0.0; 4], cf: [0.0; 5], cf_ready: false, rev: Reverb::new(sr), roll: None, quiet: 0, tg: None,
         }
     }
@@ -243,17 +246,24 @@ fn run(s: &mut FxSlot, ol: &mut [f32], or: &mut [f32], beat0: f64, d_beat: f64, 
                     el = (xl + dl * depth) / (1.0 + 0.6 * depth); er = (xr + dr * depth) / (1.0 + 0.6 * depth);
                 }
                 FxKind::Puff => {
-                    // tape warble: a sine-swept 1-8 ms delay (pitch wobble, no dry mix); the hit sets both how far
-                    // and how fast it sweeps (2 Hz light pull ... 7 Hz hard rip), LEVEL/DEPTH caps it
-                    s.mod_s += (s.modv - s.mod_s) * (1.0 / (0.05 * sr)); // ~50 ms: BLE readings arrive in steps
+                    // theremin: a sine voice whose pitch glides with the hit (A3 220 Hz light pull ... A5 880 Hz hard rip,
+                    // ~150 ms portamento, 5.5 Hz vibrato) and whose volume swells with it, over a gentle tape warble
+                    // (a sine-swept 1-8 ms delay, no dry mix) that the hit also deepens; LEVEL/DEPTH caps both
+                    s.mod_s += (s.modv - s.mod_s) * (1.0 / (0.15 * sr)); // ~150 ms glide: BLE readings arrive in steps
                     let a = s.mod_s * depth;
-                    s.lfo += (2.0 + 5.0 * a) / sr; if s.lfo >= 1.0 { s.lfo -= 1.0; }
-                    let dd = (0.0045 + 0.0035 * a * (2.0 * PI * s.lfo).sin()) * sr;
+                    s.lfo += 5.5 / sr; if s.lfo >= 1.0 { s.lfo -= 1.0; }
+                    let vib = (2.0 * PI * s.lfo).sin();
+                    let want = 220.0 * 2f64.powf(2.0 * s.mod_s) * 2f64.powf(0.25 * a * vib / 12.0);
+                    s.th_f += (want - s.th_f) * (1.0 / (0.04 * sr));
+                    s.th_ph += s.th_f / sr; if s.th_ph >= 1.0 { s.th_ph -= 1.0; }
+                    // a touch of second harmonic so it sings rather than beeps
+                    let voice = ((2.0 * PI * s.th_ph).sin() + 0.18 * (4.0 * PI * s.th_ph).sin()) * 0.22 * a;
+                    let dd = (0.0045 + 0.0025 * a * vib) * sr;
                     let mut rp = w as f64 - dd; if rp < 0.0 { rp += dn as f64; }
                     let i0 = rp as usize; let f = rp - i0 as f64; let i1 = if i0 + 1 == dn { 0 } else { i0 + 1 };
                     s.dl[w] = xl as f32; s.dr[w] = xr as f32;
-                    el = s.dl[i0] as f64 + (s.dl[i1] as f64 - s.dl[i0] as f64) * f;
-                    er = s.dr[i0] as f64 + (s.dr[i1] as f64 - s.dr[i0] as f64) * f;
+                    el = s.dl[i0] as f64 + (s.dl[i1] as f64 - s.dl[i0] as f64) * f + voice;
+                    er = s.dr[i0] as f64 + (s.dr[i1] as f64 - s.dr[i0] as f64) * f + voice;
                     w += 1; if w == dn { w = 0; }
                 }
                 FxKind::Filter | FxKind::Hpf | FxKind::Lpf => {
@@ -352,5 +362,26 @@ mod tests {
         u.process(&mut l, &mut r, 0.0);
         // beat = 0.5 s: open for the first 0.25 s, shut for the next
         assert!(l[6000] > 0.99 && l[18000] < 0.01 && l[30000] > 0.99, "{} {} {}", l[6000], l[18000], l[30000]);
+    }
+    #[test]
+    fn puff_sings_higher_the_harder_the_hit() {
+        // silence in: PUFF's theremin voice is the only sound; count zero crossings for its pitch
+        let pitch = |hit: f64| {
+            let sr = 48000.0;
+            let mut u = FxUnit::new(sr);
+            u.beat.set(SlotSet { fx: Some(FxKind::Puff), depth: Some(1.0), on: Some(true), ..Default::default() });
+            u.beat.modv = hit;
+            let mut last = (vec![0f32; 1], 0.0);
+            for _ in 0..4 { let (mut l, mut r) = (vec![0f32; 48000], vec![0f32; 48000]); u.process(&mut l, &mut r, 0.0); last = (l, 0.0); }
+            let l = last.0;
+            let peak = l.iter().fold(0f32, |m, x| m.max(x.abs()));
+            let up = l.windows(2).filter(|w| w[0] < 0.0 && w[1] >= 0.0).count();
+            (up as f64, peak)
+        };
+        let (soft, soft_peak) = pitch(0.2);
+        let (hard, hard_peak) = pitch(1.0);
+        assert!((780.0..980.0).contains(&hard), "hard hit ≈ 880 Hz: {hard}");
+        assert!(soft < hard * 0.6 && soft_peak < hard_peak, "soft {soft} Hz / {soft_peak}, hard {hard} Hz / {hard_peak}");
+        assert!(pitch(0.0).1 < 1e-4, "no hit, no voice");
     }
 }
