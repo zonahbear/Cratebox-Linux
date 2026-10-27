@@ -111,17 +111,33 @@ impl Gui {
             ui.label(egui::RichText::new("BOX").font(bold(17.0)).color(deck_color(0)));
             ui.spacing_mut().item_spacing.x = 5.0;
             ui.add_space(8.0);
+            // narrow window (the MacBook's 1152 pt): short pills, and the status line floats under the header
+            let compact = ui.available_width() < 1240.0;
             // controller pill
             let on = !self.app.midi_io.name.is_empty();
             let name = if on { self.app.midi_io.name.split(':').next().unwrap_or("").to_string() } else { self.app.midi_io.error.clone().map(|_| "MIDI unavailable".to_string()).unwrap_or_else(|| "No controller".into()) };
+            let name = if compact { if on { name.chars().take(10).collect() } else { "MIDI".to_string() } } else { name };
             pill(ui, &name, on).on_hover_text(self.app.midi_io.error.clone().unwrap_or_default());
             let ch = self.app.audio.channels;
             let out = if self.app.audio.running() { if self.app.audio.device.is_empty() { "Default output".to_string() } else { short_dev(&self.app.audio.device) } } else { "No sound output".into() };
+            let out = if compact { if self.app.audio.running() { out.chars().take(10).collect() } else { "NO OUT".to_string() } } else { out };
             pill(ui, &format!("{out} · {ch} ch"), self.app.audio.running() && ch >= 4).on_hover_text(&self.app.hp_note);
             ui.add_space(4.0);
             let st = self.app.status_text().to_string();
-            let right_w = 470.0 + 40.0 + 130.0 + 110.0 + 40.0 + if self.battery.1.is_some() { 130.0 } else { 0.0 };
-            ui.add_sized(vec2((ui.available_width() - right_w).max(40.0), 20.0), egui::Label::new(egui::RichText::new(st).color(MUTED).size(11.5)).truncate());
+            let right_w = 470.0 + 40.0 + 130.0 + 110.0 + 40.0 + 140.0 + if self.battery.1.is_some() { 130.0 } else { 0.0 };
+            if compact {
+                if !st.is_empty() {
+                    let top = ui.max_rect().bottom() + 6.0;
+                    egui::Area::new(egui::Id::new("status_toast")).order(egui::Order::Foreground).interactable(false)
+                        .anchor(egui::Align2::CENTER_TOP, vec2(0.0, top)).show(ui.ctx(), |ui| {
+                            egui::Frame::new().fill(PANEL_D).corner_radius(4.0).inner_margin(egui::Margin::symmetric(10, 4))
+                                .show(ui, |ui| ui.label(egui::RichText::new(&st).color(FG).size(11.5)));
+                        });
+                }
+                ui.add_space((ui.available_width() - right_w).max(0.0));
+            } else {
+                ui.add_sized(vec2((ui.available_width() - right_w).max(40.0), 20.0), egui::Label::new(egui::RichText::new(st).color(MUTED).size(11.5)).truncate());
+            }
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                 let lv = [level(self.app.status_snap.master_meter[0]), level(self.app.status_snap.master_meter[1])];
                 meter(ui, vec2(5.0, 24.0), lv[1]);
@@ -193,8 +209,16 @@ impl Gui {
                 // CPU (whole machine, %) and memory in use (MB), every 2 s
                 if self.sys.at.elapsed().as_secs_f32() >= 2.0 { self.sys.sample(); }
                 ui.add_space(4.0);
-                ui.label(egui::RichText::new(format!("CPU {:.0}% · {} MB", self.sys.cpu, self.sys.mem_mb)).font(mono(11.0))
-                    .color(if self.sys.cpu >= 85.0 { RED } else { MUTED })).on_hover_text("CPU use of the whole computer, and memory in use");
+                // two small lines: CPU + memory over network rates, Wi-Fi signal and Bluetooth
+                let (wt, wc) = match self.sys.wifi { Some(q) => (format!("WI-FI {q}%"), if q < 30 { RED } else { MUTED }), None => ("WI-FI OFF".into(), RED) };
+                let l1 = format!("CPU {:.0}% · {} MB · BT {}", self.sys.cpu, self.sys.mem_mb, if self.sys.bt { "ON" } else { "OFF" });
+                let l2 = format!("↓{} ↑{} · {wt}", rate_text(self.sys.down), rate_text(self.sys.up));
+                let (c1, c2) = (if self.sys.cpu >= 85.0 || !self.sys.bt { RED } else { MUTED }, wc);
+                ui.with_layout(Layout::top_down(Align::Max), |ui| {
+                    ui.spacing_mut().item_spacing.y = 0.0;
+                    ui.add(egui::Label::new(egui::RichText::new(l1).font(mono(9.5)).color(c1)).extend()).on_hover_text("CPU use of the whole computer, memory in use, Bluetooth (HEAT needs it)");
+                    ui.add(egui::Label::new(egui::RichText::new(l2).font(mono(9.5)).color(c2)).extend()).on_hover_text("Network download / upload (all connections) and Wi-Fi signal");
+                });
             });
         });
     }
@@ -1773,11 +1797,32 @@ fn strobe(ctx: &egui::Context) -> f32 {
     0.35 + 0.65 * (0.5 + 0.5 * (t * std::f64::consts::TAU * 1.5).cos()) as f32
 }
 /// CPU % (from /proc/stat between two samples) and memory in use (MemTotal - MemAvailable)
-struct SysStats { at: std::time::Instant, last: (u64, u64), cpu: f32, mem_mb: u64 }
+/// CPU, memory, Wi-Fi signal (% from /proc/net/wireless, None = not connected), Bluetooth on, and network
+/// rates (bytes/s down, up) over every interface but lo
+struct SysStats { at: std::time::Instant, last: (u64, u64), cpu: f32, mem_mb: u64, net_last: Option<(u64, u64)>, down: f64, up: f64, wifi: Option<u32>, bt: bool }
 impl SysStats {
-    fn new() -> Self { let mut s = SysStats { at: std::time::Instant::now(), last: (0, 0), cpu: 0.0, mem_mb: 0 }; s.sample(); s }
+    fn new() -> Self { let mut s = SysStats { at: std::time::Instant::now(), last: (0, 0), cpu: 0.0, mem_mb: 0, net_last: None, down: 0.0, up: 0.0, wifi: None, bt: false }; s.sample(); s }
     fn sample(&mut self) {
+        let dt = self.at.elapsed().as_secs_f64().max(0.1);
         self.at = std::time::Instant::now();
+        if let Ok(n) = std::fs::read_to_string("/proc/net/dev") {
+            let (mut rx, mut tx) = (0u64, 0u64);
+            for l in n.lines().skip(2) {
+                let Some((name, rest)) = l.split_once(':') else { continue };
+                if name.trim() == "lo" { continue; }
+                let v: Vec<u64> = rest.split_whitespace().filter_map(|x| x.parse().ok()).collect();
+                if v.len() >= 9 { rx += v[0]; tx += v[8]; }
+            }
+            if let Some((r0, t0)) = self.net_last { self.down = rx.saturating_sub(r0) as f64 / dt; self.up = tx.saturating_sub(t0) as f64 / dt; }
+            self.net_last = Some((rx, tx));
+        }
+        // link quality is out of 70 on most drivers (brcmfmac included)
+        self.wifi = std::fs::read_to_string("/proc/net/wireless").ok().and_then(|w| w.lines().nth(2).and_then(|l| l.split_whitespace().nth(2)?.trim_end_matches('.').parse::<f64>().ok()))
+            .map(|q| ((q / 70.0 * 100.0).round() as u32).min(100));
+        self.bt = std::fs::read_dir("/sys/class/rfkill").map(|d| d.flatten().any(|e| {
+            let r = |f: &str| std::fs::read_to_string(e.path().join(f)).unwrap_or_default();
+            r("type").trim() == "bluetooth" && r("soft").trim() == "0" && r("hard").trim() == "0"
+        })).unwrap_or(false);
         if let Some(l) = std::fs::read_to_string("/proc/stat").ok().and_then(|s| s.lines().next().map(str::to_string)) {
             let v: Vec<u64> = l.split_whitespace().skip(1).filter_map(|x| x.parse().ok()).collect();
             if v.len() >= 5 {
@@ -1997,3 +2042,6 @@ fn phase_tag(d: &crate::deck::Deck) -> Option<(String, Color32)> {
 
 /// a gain as a dB readout: "+1.6", "-12.0", "-∞"
 fn db_text(g: f64) -> String { if g <= 1e-4 { "-∞".into() } else { format!("{:+.1}", 20.0 * g.log10()) } }
+
+/// a network rate: "820 kbps", "12.4 Mbps"
+fn rate_text(bytes_s: f64) -> String { let kb = bytes_s * 8.0 / 1000.0; if kb >= 1000.0 { format!("{:.1} Mbps", kb / 1000.0) } else { format!("{:.0} kbps", kb) } }
