@@ -962,6 +962,18 @@ impl Gui {
         self.reg("search", r.rect);
         if std::mem::take(&mut self.focus_search) { r.request_focus(); }
         if r.changed() { self.app.apply_view(false); }
+        // quick sort: BPM, KEY, MATCH (what mixes into the playing deck first); again flips the order
+        for (label, k, tip) in [("BPM", SortKey::Bpm, "Sort by tempo"), ("KEY", SortKey::Key, "Sort by Camelot key"), ("MATCH", SortKey::Match, "Tracks that mix into the playing deck first: same key, then neighbours, nearest tempo")] {
+            let on = self.app.list.sort == Some(k);
+            let txt = if on && k != SortKey::Match { format!("{label} {}", if self.app.list.dir > 0 { "▴" } else { "▾" }) } else { label.to_string() };
+            let r = ui.selectable_label(on, txt).on_hover_text(tip);
+            self.reg(format!("sort:{label}"), r.rect);
+            if r.clicked() {
+                self.app.list.dir = if on && k != SortKey::Match { -self.app.list.dir } else { 1 };
+                self.app.list.sort = if on && k == SortKey::Match { None } else { Some(k) };
+                self.app.apply_view(true);
+            }
+        }
         let browse = self.app.store.settings.browse;
         if ui.selectable_label(browse, "BROWSE").on_hover_text("Big library, waveforms only (SHIFT + press BROWSE on the FLX4)").clicked() {
             self.app.store.settings.browse = !browse; self.app.store.dirty_settings = true;
@@ -1158,6 +1170,12 @@ impl Gui {
             });
             return;
         }
+        // MATCH follows the playing deck: re-sort when its key changes or its tempo moves by a BPM or more
+        if self.app.list.sort == Some(SortKey::Match) {
+            let (k, b) = self.app.mix_ref();
+            let (k0, b0) = self.app.list.mix_ref;
+            if k != k0 || (b - b0).abs() >= 1.0 { self.app.apply_view(true); }
+        }
         let n = self.app.list.view.len();
         let ref_key = self.ref_key();
         let mut sa = egui::ScrollArea::vertical().id_salt("list").auto_shrink([false, false]);
@@ -1198,8 +1216,13 @@ impl Gui {
                 cell(3, bpm, if t.grid_manual { LOOP } else { MUTED }, true);
                 match t.key.and_then(camelot) {
                     Some(c) => {
-                        let m = keys_match(Some(c), ref_key);
-                        if m { p.rect_filled(Rect::from_min_size(pos2(rect.left() + xs[4] + 4.0, rect.top() + 3.0), vec2(36.0, ROW - 6.0)), 3.0, Color32::from_rgba_unmultiplied(80, 220, 140, 40)); }
+                        // mixes with the playing deck: same key bright, a neighbour (±1, A⇄B) softer
+                        let a = if ref_key == Some(c) { 90 } else if keys_match(Some(c), ref_key) { 50 } else { 0 };
+                        if a > 0 {
+                            let kr = Rect::from_min_size(pos2(rect.left() + xs[4] + 4.0, rect.top() + 3.0), vec2(36.0, ROW - 6.0));
+                            p.rect_filled(kr, 3.0, Color32::from_rgba_unmultiplied(80, 220, 140, a));
+                            p.rect_stroke(kr, 3.0, Stroke::new(1.0_f32, Color32::from_rgba_unmultiplied(80, 220, 140, a + 60)), StrokeKind::Inside);
+                        }
                         cell(4, c.label(), rgb(c.color()), true);
                     }
                     None => cell(4, if t.key == Some(-1) || t.failed { "?".into() } else if t.bpm.is_none() { "…".into() } else { String::new() }, MUTED, true),
@@ -1258,12 +1281,8 @@ impl Gui {
         });
         ui.ctx().memory_mut(|m| m.data.insert_temp(ui.id().with("listoff"), out.state.offset.y));
     }
-    /// the key to mix into: the deck that started playing most recently
-    fn ref_key(&self) -> Option<crate::keys::Camelot> {
-        let mut p: Vec<&crate::deck::Deck> = self.app.decks.iter().filter(|d| d.playing && d.loaded()).collect();
-        p.sort_by_key(|d| std::cmp::Reverse(d.started_at));
-        p.first().and_then(|d| camelot(d.key_now()))
-    }
+    /// the key to mix into: the deck that started playing most recently (else the first loaded one)
+    fn ref_key(&self) -> Option<crate::keys::Camelot> { self.app.mix_ref().0 }
 
     // ===================================================================== settings + learn bar
     fn settings(&mut self, ctx: &egui::Context) {

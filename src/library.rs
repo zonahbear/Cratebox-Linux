@@ -1,7 +1,7 @@
 //! The track library: folder scanning, tags, the analysis cache, search/sort and the current view.
 
 use crate::analysis::{fold_bpm, Phrase, ANALYSIS_VER};
-use crate::keys::camelot;
+use crate::keys::{camelot, keys_match, Camelot};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -203,13 +203,15 @@ pub fn scan_dir(root: &Path) -> Vec<PathBuf> {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub enum SortKey { Title, Artist, Bpm, Key, Time }
+pub enum SortKey { Title, Artist, Bpm, Key, Time, Match }
 
 /// the list the library shows: indices into the view's track list, with their own positions
 #[derive(Default)]
 pub struct ListState {
     pub query: String,
     pub sort: Option<SortKey>,
+    /// what MATCH sorts against: the playing deck's key now and its tempo
+    pub mix_ref: (Option<Camelot>, f64),
     pub dir: i32,
     /// tracks shown (cloned rows: library tracks or playlist "missing" rows)
     pub view: Vec<Track>,
@@ -219,6 +221,19 @@ pub struct ListState {
     pub sel_ids: std::collections::HashSet<String>,
     pub anchor: usize,
     pub scroll_to_sel: bool,
+}
+
+/// MATCH order: same key, then a harmonic neighbour, then the rest; within each, nearest tempo
+/// (half and double time count as near: 87 sits next to 174)
+pub fn match_score(t: &Track, (key, bpm): (Option<Camelot>, f64)) -> f64 {
+    let k = t.key.and_then(camelot);
+    let tier = match (k, key) {
+        (Some(a), Some(b)) if a == b => 0.0,
+        (a, b) if keys_match(a, b) => 1.0,
+        _ => 2.0,
+    };
+    let d = match t.bpm { Some(b) if b > 0.0 && bpm > 0.0 => [b, b * 2.0, b / 2.0].iter().map(|x| (x - bpm).abs()).fold(f64::MAX, f64::min), _ => 999.0 };
+    tier * 1000.0 + d.min(999.0)
 }
 
 impl ListState {
@@ -240,6 +255,7 @@ impl ListState {
                     SortKey::Bpm => a.0.bpm.unwrap_or(0.0).partial_cmp(&b.0.bpm.unwrap_or(0.0)).unwrap(),
                     SortKey::Key => a.0.key_sort().cmp(&b.0.key_sort()),
                     SortKey::Time => a.0.duration.unwrap_or(0.0).partial_cmp(&b.0.duration.unwrap_or(0.0)).unwrap(),
+                    SortKey::Match => match_score(&a.0, self.mix_ref).partial_cmp(&match_score(&b.0, self.mix_ref)).unwrap(),
                 };
                 if d < 0.0 { o.reverse() } else { o }
             });
@@ -309,5 +325,15 @@ mod tests {
         l.query = "c".into();
         l.apply(vec![mk("b", 140.0), mk("a", 126.0), mk("c", 174.0)], true);
         assert_eq!(l.view.len(), 1);
+    }
+    #[test]
+    fn match_puts_what_mixes_in_first() {
+        let mk = |t: &str, k: i32, b: f64| Track { id: t.into(), title: t.into(), key: Some(k), bpm: Some(b), ..Default::default() };
+        let mut l = ListState::new();
+        l.sort = Some(SortKey::Match);
+        l.mix_ref = (camelot(21), 128.0); // A minor = 8A
+        // 3B (Db major), 8B (C major) at 87, 8A (A minor) at 140, 9A (E minor) at 128
+        l.apply(vec![mk("z", 1, 128.0), mk("w", 0, 87.0), mk("x", 21, 140.0), mk("y", 16, 128.0)], false);
+        assert_eq!(l.view.iter().map(|t| t.title.as_str()).collect::<Vec<_>>(), ["x", "y", "w", "z"]);
     }
 }
