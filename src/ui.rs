@@ -1352,6 +1352,11 @@ impl Gui {
                     for (v, l) in spins { ui.selectable_value(&mut spin, v, l); }
                 });
                 if (spin - self.app.store.settings.spin).abs() > 1e-9 { self.app.set_spin(spin); }
+                ui.horizontal(|ui| {
+                    let r = ui.add(egui::Slider::new(&mut self.app.store.settings.wave_offset_ms, -100.0..=100.0).step_by(1.0).suffix(" ms").text("Waveform timing"));
+                    if r.changed() { self.app.store.dirty_settings = true; }
+                    r.on_hover_text("Cratebox already allows for the sound card's delay. If the waveform still runs ahead of what you hear, move this up; if it trails, move it down");
+                });
                 if ui.checkbox(&mut self.app.store.settings.browse_close_on_load, "Back to the decks after loading a track from BROWSE").changed() { self.app.store.dirty_settings = true; }
                 ui.label(egui::RichText::new("Music folders").strong());
                 for f in self.app.store.settings.folders.clone() {

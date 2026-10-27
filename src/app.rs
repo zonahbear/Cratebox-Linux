@@ -1146,6 +1146,9 @@ impl App {
         if let Ok(s) = self.shared.lock() { self.status_snap = *s; }
         let snap = self.status_snap;
         for i in 0..DECKS { self.decks[i].on_report(&snap.decks[i], snap.at); }
+        // draw what's being heard: the output latency, less the frame on its way to the screen, plus the user's nudge
+        let delay = (self.audio.latency() - 1.0 / 60.0 + self.store.settings.wave_offset_ms / 1000.0).clamp(-0.2, 0.5);
+        for d in self.decks.iter_mut() { d.vis_delay = delay; }
         while self.trash_rx.try_recv().is_ok() {} // finished-with audio buffers get freed here, not on the audio thread
         if let Some(e) = self.audio.take_error() { self.say(&format!("Sound output problem: {e}"), 8.0); }
         self.watch_output();
