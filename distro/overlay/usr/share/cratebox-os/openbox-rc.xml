@@ -1,20 +1,66 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<!-- openbox for the Cratebox kiosk session: no decorations, everything maximised, and two ways
-     to close Cratebox (which hands over to the desktop). -->
+<!-- openbox for the Cratebox kiosk session: Cratebox full screen (it asks for that itself, no frame);
+     Soulseek, Chrome and the file manager open as normal windows over it (title bar, drag to move, drag
+     an edge to resize, double-click the title to maximise). Alt+Tab switches windows; two ways to close. -->
 <openbox_config xmlns="http://openbox.org/3.4/rc">
   <desktops><number>1</number></desktops>
+  <focus><focusNew>yes</focusNew><followMouse>no</followMouse></focus>
+  <placement><policy>Smart</policy><center>yes</center></placement>
+  <theme>
+    <!-- no minimise button: with no taskbar a minimised window would be lost (Alt+Tab still finds it) -->
+    <titleLayout>LMC</titleLayout>
+    <keepBorder>yes</keepBorder>
+  </theme>
   <keyboard>
     <keybind key="A-F4"><action name="Close"/></keybind>
     <keybind key="C-A-q"><action name="Close"/></keybind>
+    <keybind key="A-Tab"><action name="NextWindow"><finalactions><action name="Focus"/><action name="Raise"/><action name="Unshade"/></finalactions></action></keybind>
+    <keybind key="A-S-Tab"><action name="PreviousWindow"><finalactions><action name="Focus"/><action name="Raise"/><action name="Unshade"/></finalactions></action></keybind>
     <!-- Command+Shift X / . = bar 1 here on the left / right deck (the app can't see the Command key) -->
     <keybind key="W-S-x"><action name="Execute"><command>cratebox --cmd beat1 left</command></action></keybind>
     <keybind key="W-S-period"><action name="Execute"><command>cratebox --cmd beat1 right</command></action></keybind>
   </keyboard>
-  <mouse/>
+  <mouse>
+    <dragThreshold>3</dragThreshold>
+    <doubleClickTime>400</doubleClickTime>
+    <context name="Frame">
+      <mousebind button="A-Left" action="Press"><action name="Focus"/><action name="Raise"/></mousebind>
+      <mousebind button="A-Left" action="Drag"><action name="Move"/></mousebind>
+    </context>
+    <context name="Titlebar">
+      <mousebind button="Left" action="Press"><action name="Focus"/><action name="Raise"/></mousebind>
+      <mousebind button="Left" action="Drag"><action name="Move"/></mousebind>
+      <mousebind button="Left" action="DoubleClick"><action name="ToggleMaximize"/></mousebind>
+    </context>
+    <context name="Top Left Right Bottom TLCorner TRCorner BLCorner BRCorner">
+      <mousebind button="Left" action="Press"><action name="Focus"/><action name="Raise"/></mousebind>
+      <mousebind button="Left" action="Drag"><action name="Resize"/></mousebind>
+    </context>
+    <context name="Client">
+      <mousebind button="Left" action="Press"><action name="Focus"/><action name="Raise"/></mousebind>
+      <mousebind button="Middle" action="Press"><action name="Focus"/><action name="Raise"/></mousebind>
+      <mousebind button="Right" action="Press"><action name="Focus"/><action name="Raise"/></mousebind>
+    </context>
+    <context name="Close">
+      <mousebind button="Left" action="Press"><action name="Focus"/><action name="Raise"/></mousebind>
+      <mousebind button="Left" action="Click"><action name="Close"/></mousebind>
+    </context>
+    <context name="Maximize">
+      <mousebind button="Left" action="Press"><action name="Focus"/><action name="Raise"/></mousebind>
+      <mousebind button="Left" action="Click"><action name="ToggleMaximize"/></mousebind>
+    </context>
+  </mouse>
   <applications>
+    <!-- everything else: a normal window, 80% of the screen, centred -->
     <application class="*">
+      <decor>yes</decor>
+      <maximized>no</maximized>
+      <position force="no"><x>center</x><y>center</y></position>
+      <size><width>80%</width><height>80%</height></size>
+    </application>
+    <!-- Cratebox itself: no frame (the kiosk session starts it full screen) -->
+    <application class="cratebox">
       <decor>no</decor>
-      <maximized>yes</maximized>
     </application>
   </applications>
 </openbox_config>

@@ -28,6 +28,11 @@ pub struct Gui {
     deck_rects: [Rect; DECKS],
     jog_last: [Option<f32>; DECKS],
     lane_drag: [Option<(f32, f32, std::time::Instant, bool, bool)>; DECKS],
+    /// Settings: the open tab, the Wi-Fi/Bluetooth worker (started the first time those tabs open) and a
+    /// Wi-Fi password being typed (network, password)
+    settings_tab: usize,
+    net: Option<crate::net::Net>,
+    wifi_pw: Option<(String, String)>,
     /// each lane's waveform tiles on the GPU (widgets::WaveCache)
     lane_cache: [WaveCache; DECKS],
     /// a PAD FX pad held with the mouse (deck, pad)
@@ -88,7 +93,7 @@ impl Gui {
         app.midi_io.set_wake(wake.clone());
         app.watch_drives();
         let remote = crate::remote::listen(move || wake());
-        Gui { app, deck_rects: [Rect::NOTHING; DECKS], jog_last: [None; DECKS], lane_drag: [None; DECKS], lane_cache: Default::default(), pad_held: None, frames: 0, test_shot: None,
+        Gui { app, deck_rects: [Rect::NOTHING; DECKS], jog_last: [None; DECKS], lane_drag: [None; DECKS], lane_cache: Default::default(), settings_tab: 0, net: None, wifi_pw: None, pad_held: None, frames: 0, test_shot: None,
             rects: Default::default(), uitest: crate::uitest::UiTest::from_env(), heat_open: false, power_open: false, sys: SysStats::new(), battery: (std::time::Instant::now().checked_sub(std::time::Duration::from_secs(60)).unwrap_or_else(std::time::Instant::now), read_battery()), power_confirm: None, bat_alerted: 100, bat_dialog: None, wave_browse: None, last_sel: usize::MAX, heat_paste: String::new(), hitting: false, focus_search: false, keys_open: false, remote, seen_loads: 0, pl_names: (0, Default::default()) }
     }
 
@@ -190,13 +195,20 @@ impl Gui {
                 let r = icon_button(ui, Icon::List, lib, FG()).on_hover_text("Library under the decks: show or hide (hidden: scroll to pop it up)");
                 self.reg("lib", r.rect);
                 if r.clicked() { self.app.store.settings.lib_hidden = lib; self.app.store.dirty_settings = true; }
-                // quick launchers: Chrome (cratebox-web, from os-files) and the file manager
+                // quick launchers: Chrome (cratebox-web, from os-files), Nicotine+ (cratebox-soulseek) and the file manager
                 let r = icon_button(ui, Icon::Globe, false, FG()).on_hover_text("WEB: Chrome, downloads go straight into the collection");
                 self.reg("web", r.rect);
                 if r.clicked() {
                     // nothing launched: say why (the helper comes with the app update)
                     if let Err(e) = std::process::Command::new("cratebox-web").spawn() {
                         self.app.say(&format!("Chrome didn't start ({e}). Run Update Cratebox from the Cratebox OS menu to get the helper."), 10.0);
+                    }
+                }
+                let r = icon_button(ui, Icon::Search, false, FG()).on_hover_text("SOULSEEK: Nicotine+, downloads go straight into the collection");
+                self.reg("soulseek", r.rect);
+                if r.clicked() {
+                    if let Err(e) = std::process::Command::new("cratebox-soulseek").spawn().or_else(|_| std::process::Command::new("nicotine").spawn()) {
+                        self.app.say(&format!("Soulseek didn't start ({e}). Run Update Cratebox from the Cratebox OS menu to get the helper."), 10.0);
                     }
                 }
                 let r = icon_button(ui, Icon::Folder, false, FG()).on_hover_text("FILES: open the file manager");
@@ -237,8 +249,10 @@ impl Gui {
                 let (c1, c2) = (if self.sys.cpu >= 85.0 || !self.sys.bt { RED } else { MUTED() }, wc);
                 ui.with_layout(Layout::top_down(Align::Max), |ui| {
                     ui.spacing_mut().item_spacing.y = 0.0;
-                    ui.add(egui::Label::new(egui::RichText::new(l1).font(mono(9.5)).color(c1)).extend()).on_hover_text("CPU use of the whole computer, memory in use, Bluetooth (HEAT needs it)");
-                    ui.add(egui::Label::new(egui::RichText::new(l2).font(mono(9.5)).color(c2)).extend()).on_hover_text("Network download / upload (all connections) and Wi-Fi signal");
+                    let r1 = ui.add(egui::Label::new(egui::RichText::new(l1).font(mono(9.5)).color(c1)).extend().sense(Sense::click())).on_hover_text("CPU use of the whole computer, memory in use, Bluetooth (HEAT needs it). Click: Bluetooth settings");
+                    let r2 = ui.add(egui::Label::new(egui::RichText::new(l2).font(mono(9.5)).color(c2)).extend().sense(Sense::click())).on_hover_text("Network download / upload (all connections) and Wi-Fi signal. Click: Wi-Fi settings");
+                    if r1.clicked() { self.settings_tab = TAB_WIFI + 1; self.app.ui.settings_open = true; }
+                    if r2.clicked() { self.settings_tab = TAB_WIFI; self.app.ui.settings_open = true; }
                 });
             });
         });
@@ -1310,168 +1324,290 @@ impl Gui {
     // ===================================================================== settings + learn bar
     fn settings(&mut self, ctx: &egui::Context) {
         let mut open = self.app.ui.settings_open;
-        let max_h = (ctx.screen_rect().height() - 90.0).max(200.0);
-        egui::Window::new("Settings").open(&mut open).resizable(true).default_width(480.0).collapsible(false).show(ctx, |ui| {
-            egui::ScrollArea::vertical().max_height(max_h).show(ui, |ui| {
-                ui.heading("Look");
-                ui.horizontal_wrapped(|ui| {
-                    for t in THEMES.iter() {
-                        let on = theme().name == t.name;
-                        let r = ui.add(egui::Button::new(egui::RichText::new(t.name).color(if on { FG() } else { MUTED() })).selected(on).min_size(vec2(84.0, 26.0)));
-                        // the theme's four deck colours under its name
-                        let y = r.rect.bottom() - 4.0;
-                        for k in 0..4 { ui.painter().rect_filled(Rect::from_min_size(pos2(r.rect.left() + 8.0 + k as f32 * 17.0, y), vec2(15.0, 2.0)), 0.0, t.deck(k)); }
-                        if r.clicked() { set_theme(t.name); style(ui.ctx()); self.app.store.settings.theme = t.name.to_string(); self.app.store.dirty_settings = true; }
+        let h = (ctx.screen_rect().height() - 110.0).clamp(280.0, 560.0);
+        egui::Window::new("Settings").open(&mut open).resizable(false).collapsible(false).fixed_size(vec2(660.0, h)).show(ctx, |ui| {
+            ui.horizontal_top(|ui| {
+                // tabs down the left, each with its icon
+                ui.vertical(|ui| {
+                    ui.set_width(136.0);
+                    for (k, (icon, name)) in SETTINGS_TABS.iter().enumerate() {
+                        let (r, resp) = ui.allocate_exact_size(vec2(136.0, 30.0), Sense::click());
+                        let on = self.settings_tab == k;
+                        if on { ui.painter().rect_filled(r, 5.0, SEL()); } else if resp.hovered() { ui.painter().rect_filled(r, 5.0, HOVER()); }
+                        let c = if on { FG() } else { MUTED() };
+                        paint_icon(ui.painter(), Rect::from_center_size(pos2(r.left() + 17.0, r.center().y), vec2(20.0, 20.0)), *icon, c);
+                        ui.painter().text(pos2(r.left() + 34.0, r.center().y), egui::Align2::LEFT_CENTER, *name, prop(12.5), c);
+                        self.reg(format!("settings_tab{k}"), r);
+                        if resp.clicked() { self.settings_tab = k; }
                     }
                 });
                 ui.separator();
-                ui.heading("Library");
-                let s = &self.app.store.settings;
-                let (mut br, custom) = (s.bpm_range, crate::analysis::BPM_CUSTOM);
-                let name = if br >= custom { "Custom" } else { crate::analysis::BPM_RANGES[br].0 };
-                egui::ComboBox::from_label("BPM range (where half/double-time tracks land)").selected_text(name).show_ui(ui, |ui| {
-                    for (k, r) in crate::analysis::BPM_RANGES.iter().enumerate() { ui.selectable_value(&mut br, k, r.0); }
-                    ui.selectable_value(&mut br, custom, "Custom");
-                });
-                if br != s.bpm_range { self.app.set_bpm_range(br); }
-                if br >= custom {
-                    // the top end is kept at least an octave above the bottom, so every tempo has a place
-                    let (mut lo, mut hi) = (self.app.store.settings.bpm_lo, self.app.store.settings.bpm_hi);
-                    let mut done = false;
-                    ui.horizontal(|ui| {
-                        ui.label("From");
-                        let r = ui.add(egui::DragValue::new(&mut lo).range(40.0..=150.0).speed(0.5).suffix(" BPM")); done |= r.lost_focus() || r.drag_stopped();
-                        ui.label("to");
-                        let r = ui.add(egui::DragValue::new(&mut hi).range(79.0..=300.0).speed(0.5).suffix(" BPM")); done |= r.lost_focus() || r.drag_stopped();
+                ui.vertical(|ui| {
+                    ui.set_width(490.0);
+                    ui.heading(SETTINGS_TABS[self.settings_tab.min(SETTINGS_TABS.len() - 1)].1);
+                    ui.add_space(4.0);
+                    egui::ScrollArea::vertical().id_salt(("settings", self.settings_tab)).max_height(h - 40.0).auto_shrink([false, false]).show(ui, |ui| {
+                        match self.settings_tab {
+                            0 => self.settings_look(ui),
+                            1 => self.settings_library(ui),
+                            2 => self.settings_decks(ui),
+                            3 => self.settings_sound(ui),
+                            4 => self.settings_controller(ui),
+                            5 => self.settings_wifi(ui),
+                            6 => self.settings_bluetooth(ui),
+                            _ => self.settings_rekordbox(ui),
+                        }
                     });
-                    let (l, h) = crate::analysis::custom_range(lo, hi);
-                    self.app.store.settings.bpm_lo = l;
-                    self.app.store.settings.bpm_hi = h - 1.0;
-                    if done { self.app.set_bpm_range(custom); }
-                }
-                let mut dv = self.app.store.settings.deck_view.clone();
-                let dv_name = |v: &str| match v { "screens" => "Screens only", "controls" => "Screens and buttons", _ => "Auto (screens while a controller is connected)" };
-                egui::ComboBox::from_label("Deck area").selected_text(dv_name(&dv)).show_ui(ui, |ui| {
-                    for v in ["auto", "screens", "controls"] { ui.selectable_value(&mut dv, v.to_string(), dv_name(v)); }
                 });
-                if dv != self.app.store.settings.deck_view { self.app.store.settings.deck_view = dv; self.app.store.dirty_settings = true; }
-                let mut ws = self.app.store.settings.wave_style.clone();
-                egui::ComboBox::from_label("Waveform").selected_text(if ws == "3band" { "3-band" } else { "RGB (red lows, green mids, blue highs)" }).show_ui(ui, |ui| {
-                    ui.selectable_value(&mut ws, "rgb".to_string(), "RGB (red lows, green mids, blue highs)");
-                    ui.selectable_value(&mut ws, "3band".to_string(), "3-band");
-                });
-                if ws != self.app.store.settings.wave_style { self.app.store.settings.wave_style = ws; self.app.store.dirty_settings = true; }
-                let mut spin = self.app.store.settings.spin;
-                let spins = [(0.8, "Short"), (1.6, "Medium"), (2.5, "Long"), (4.0, "Extra long"), (7.0, "Ridiculous")];
-                egui::ComboBox::from_label("Backspin (spin time after a fling)").selected_text(spins.iter().find(|x| (x.0 - spin).abs() < 1e-6).map(|x| x.1).unwrap_or("Long")).show_ui(ui, |ui| {
-                    for (v, l) in spins { ui.selectable_value(&mut spin, v, l); }
-                });
-                if (spin - self.app.store.settings.spin).abs() > 1e-9 { self.app.set_spin(spin); }
-                ui.horizontal(|ui| {
-                    let r = ui.add(egui::Slider::new(&mut self.app.store.settings.wave_offset_ms, -100.0..=100.0).step_by(1.0).suffix(" ms").text("Waveform timing"));
-                    if r.changed() { self.app.store.dirty_settings = true; }
-                    r.on_hover_text("Cratebox already allows for the sound card's delay. If the waveform still runs ahead of what you hear, move this up; if it trails, move it down");
-                });
-                if ui.checkbox(&mut self.app.store.settings.show_fps, "Show frame rate in the header").on_hover_text("Frames per second and missed screen refreshes over the last 5 s: 60 FPS · 0 MISSED is smooth").changed() { self.app.store.dirty_settings = true; }
-                if ui.checkbox(&mut self.app.store.settings.browse_close_on_load, "Back to the decks after loading a track from BROWSE").changed() { self.app.store.dirty_settings = true; }
-                ui.label(egui::RichText::new("Music folders").strong());
-                for f in self.app.store.settings.folders.clone() {
-                    ui.horizontal(|ui| {
-                        ui.label(f.display().to_string());
-                        if ui.small_button("Rescan").clicked() { self.app.scan_folder(&f, false); }
-                        if ui.small_button("Remove").clicked() { self.app.remove_music_folder(&f); }
-                    });
-                }
-                if ui.button("Add music folder…").clicked() { self.app.ui.dialog = Some(FileDialog::new(Purpose::AddFolder, None)); }
-
-                ui.separator();
-                ui.heading("Sound");
-                let cur = self.app.audio.device.clone();
-                let mut pick = cur.clone();
-                egui::ComboBox::from_label("Output").width(300.0).selected_text(if cur.is_empty() { "System default".to_string() } else { short_dev(&cur) }).show_ui(ui, |ui| {
-                    ui.selectable_value(&mut pick, String::new(), "System default");
-                    for d in &self.app.outputs { ui.selectable_value(&mut pick, d.name.clone(), format!("{}  ({} ch)", d.name, d.max_channels)); }
-                });
-                if pick != cur { self.app.set_output(&pick); }
-                if ui.small_button("Refresh devices").clicked() { self.app.refresh_outputs(); }
-                let mut hp = self.app.store.settings.hp_mode.clone();
-                let modes = [("auto", "Auto (FLX4: channels 3–4)"), ("quad", "Same device, channels 3–4"), ("split", "Split: master left, cue right"), ("device", "Another device"), ("off", "Off")];
-                egui::ComboBox::from_label("Headphones").selected_text(modes.iter().find(|m| m.0 == hp).map(|m| m.1).unwrap_or("Auto")).show_ui(ui, |ui| {
-                    for (v, l) in modes { ui.selectable_value(&mut hp, v.to_string(), l); }
-                });
-                if hp != self.app.store.settings.hp_mode { self.app.store.settings.hp_mode = hp.clone(); self.app.store.dirty_settings = true; self.app.apply_headphones(true); }
-                if hp == "device" {
-                    let mut hd = self.app.store.settings.hp_device.clone();
-                    egui::ComboBox::from_label("Headphone device").width(300.0).selected_text(if hd.is_empty() { "System default".into() } else { short_dev(&hd) }).show_ui(ui, |ui| {
-                        ui.selectable_value(&mut hd, String::new(), "System default");
-                        for d in &self.app.outputs { ui.selectable_value(&mut hd, d.name.clone(), d.name.clone()); }
-                    });
-                    if hd != self.app.store.settings.hp_device { self.app.store.settings.hp_device = hd; self.app.store.dirty_settings = true; self.app.apply_headphones(true); }
-                }
-                ui.label(egui::RichText::new(&self.app.hp_note).size(11.5).color(MUTED()));
-                let mut buf = self.app.store.settings.buffer;
-                egui::ComboBox::from_label("Audio buffer (lower = tighter jog, higher = no dropouts)").selected_text(format!("{buf} samples ({:.1} ms)", buf as f64 / self.app.audio.sr * 1000.0)).show_ui(ui, |ui| {
-                    for b in [128u32, 256, 512, 1024, 2048] { ui.selectable_value(&mut buf, b, format!("{b} samples ({:.1} ms)", b as f64 / self.app.audio.sr * 1000.0)); }
-                });
-                if buf != self.app.store.settings.buffer { self.app.store.settings.buffer = buf; self.app.store.dirty_settings = true; let d = self.app.audio.device.clone(); self.app.set_output(&d); }
-                ui.label(egui::RichText::new(format!("{} Hz, {} channels", self.app.audio.sr, self.app.audio.channels)).size(11.0).color(DIM()));
-                ui.horizontal(|ui| {
-                    ui.label("Recordings go to:");
-                    let r = ui.add(egui::TextEdit::singleline(&mut self.app.store.settings.rec_dir).hint_text(crate::recorder::default_dir().display().to_string()).desired_width(260.0));
-                    if r.changed() { self.app.store.dirty_settings = true; }
-                }).response.on_hover_text("● REC in the header records the master (after the limiter) to a 16-bit WAV here");
-
-                ui.separator();
-                ui.heading("Controller");
-                let ports = self.app.midi_io.ports.clone();
-                let mut pin = self.app.midi_io.name.clone();
-                egui::ComboBox::from_label("Controller").width(300.0).selected_text(if pin.is_empty() { "No controller connected".into() } else { pin.clone() }).show_ui(ui, |ui| {
-                    if ports.is_empty() { ui.label("No MIDI devices"); }
-                    for p in &ports { ui.selectable_value(&mut pin, p.clone(), p); }
-                });
-                if pin != self.app.midi_io.name && !pin.is_empty() { self.app.pick_midi_in(&pin); }
-                let mut prof = self.app.midi.profile.to_string();
-                let profs = midi::profiles();
-                egui::ComboBox::from_label("Mapping").width(300.0).selected_text(profs.iter().find(|p| p.id == prof).map(|p| p.name).unwrap_or("")).show_ui(ui, |ui| {
-                    for p in &profs { ui.selectable_value(&mut prof, p.id.to_string(), p.name); }
-                });
-                if prof != self.app.midi.profile { self.app.pick_profile(&prof); }
-                let info = self.app.midi.profile_info();
-                let n = self.app.midi.learned.len();
-                ui.label(egui::RichText::new(format!("{}{}", midi::src_note(info.src), if n > 0 { format!(" You've mapped {n} control{} yourself.", if n == 1 { "" } else { "s" }) } else { String::new() })).size(11.5).color(MUTED()));
-                ui.horizontal(|ui| {
-                    if ui.button("MIDI learn…").clicked() { self.app.start_learn(); }
-                    if ui.button("Forget learned controls").clicked() { self.app.clear_learned(); }
-                    if ui.button("Export mapping…").clicked() { self.app.ui.dialog = Some(FileDialog::new(Purpose::ExportMapping, None)); }
-                    if ui.button("Import mapping…").clicked() { self.app.ui.dialog = Some(FileDialog::new(Purpose::ImportMapping, None)); }
-                });
-                ui.horizontal(|ui| {
-                    if ui.button("Set up layer buttons…").on_hover_text("Pick the two buttons that switch the controller's sides between decks 1⇄3 and 2⇄4 (FLX4: SMART CFX and SMART FADER)").clicked() {
-                        self.app.midi.setup_layer_buttons();
-                        self.app.ui.settings_open = false;
-                    }
-                    ui.label(egui::RichText::new("4-deck mode: which buttons switch sides").size(11.0).color(DIM()));
-                });
-
-                ui.separator();
-                ui.heading("rekordbox");
-                ui.horizontal(|ui| {
-                    if ui.button("Open USB / SD…").clicked() { self.app.ui.dialog = Some(FileDialog::new(Purpose::OpenUsb, None)); }
-                    if ui.button("Import XML…").clicked() { self.app.ui.dialog = Some(FileDialog::new(Purpose::ImportXml, None)); }
-                    if ui.button("Export XML…").clicked() { self.app.ui.dialog = Some(FileDialog::new(Purpose::ExportXml, None)); }
-                });
-                ui.label(egui::RichText::new("Tracks that are also on a plugged-in rekordbox stick play on rekordbox's grid.").size(11.0).color(MUTED()));
-                if ui.button("Compare Cratebox's grids with the stick").on_hover_text("Checks where Cratebox puts bar 1 against rekordbox, for tracks on both (writes grid-compare.log)").clicked() { self.app.compare_grids(); }
-                ui.horizontal(|ui| {
-                    ui.label("Export paths as if the music folders were in:");
-                    let r = ui.add(egui::TextEdit::singleline(&mut self.app.store.settings.base_path).hint_text("(leave empty: their real location)").desired_width(220.0));
-                    if r.changed() { self.app.store.dirty_settings = true; }
-                }).response.on_hover_text("For moving the XML to another computer, e.g. C:\\Users\\you\\Music");
-                ui.separator();
-                ui.label(egui::RichText::new(format!("Library data: {}", crate::store::data_dir().display())).size(11.0).color(DIM()));
             });
         });
         self.app.ui.settings_open = open && self.app.ui.settings_open;
+        if !self.app.ui.settings_open { self.wifi_pw = None; }
+    }
+    /// Settings → Look: colour theme, frame-rate readout
+    fn settings_look(&mut self, ui: &mut Ui) {
+        ui.horizontal_wrapped(|ui| {
+            for t in THEMES.iter() {
+                let on = theme().name == t.name;
+                let r = ui.add(egui::Button::new(egui::RichText::new(t.name).color(if on { FG() } else { MUTED() })).selected(on).min_size(vec2(84.0, 26.0)));
+                // the theme's four deck colours under its name
+                let y = r.rect.bottom() - 4.0;
+                for k in 0..4 { ui.painter().rect_filled(Rect::from_min_size(pos2(r.rect.left() + 8.0 + k as f32 * 17.0, y), vec2(15.0, 2.0)), 0.0, t.deck(k)); }
+                if r.clicked() { set_theme(t.name); style(ui.ctx()); self.app.store.settings.theme = t.name.to_string(); self.app.store.dirty_settings = true; }
+            }
+        });
+        if ui.checkbox(&mut self.app.store.settings.show_fps, "Show frame rate in the header").on_hover_text("Frames per second and missed screen refreshes over the last 5 s: 60 FPS · 0 MISSED is smooth").changed() { self.app.store.dirty_settings = true; }
+    }
+    /// Settings → Library: BPM range, music folders
+    fn settings_library(&mut self, ui: &mut Ui) {
+        let s = &self.app.store.settings;
+        let (mut br, custom) = (s.bpm_range, crate::analysis::BPM_CUSTOM);
+        let name = if br >= custom { "Custom" } else { crate::analysis::BPM_RANGES[br].0 };
+        egui::ComboBox::from_label("BPM range (where half/double-time tracks land)").selected_text(name).show_ui(ui, |ui| {
+            for (k, r) in crate::analysis::BPM_RANGES.iter().enumerate() { ui.selectable_value(&mut br, k, r.0); }
+            ui.selectable_value(&mut br, custom, "Custom");
+        });
+        if br != s.bpm_range { self.app.set_bpm_range(br); }
+        if br >= custom {
+            // the top end is kept at least an octave above the bottom, so every tempo has a place
+            let (mut lo, mut hi) = (self.app.store.settings.bpm_lo, self.app.store.settings.bpm_hi);
+            let mut done = false;
+            ui.horizontal(|ui| {
+                ui.label("From");
+                let r = ui.add(egui::DragValue::new(&mut lo).range(40.0..=150.0).speed(0.5).suffix(" BPM")); done |= r.lost_focus() || r.drag_stopped();
+                ui.label("to");
+                let r = ui.add(egui::DragValue::new(&mut hi).range(79.0..=300.0).speed(0.5).suffix(" BPM")); done |= r.lost_focus() || r.drag_stopped();
+            });
+            let (l, h) = crate::analysis::custom_range(lo, hi);
+            self.app.store.settings.bpm_lo = l;
+            self.app.store.settings.bpm_hi = h - 1.0;
+            if done { self.app.set_bpm_range(custom); }
+        }
+        if ui.checkbox(&mut self.app.store.settings.browse_close_on_load, "Back to the decks after loading a track from BROWSE").changed() { self.app.store.dirty_settings = true; }
+        ui.label(egui::RichText::new("Music folders").strong());
+        for f in self.app.store.settings.folders.clone() {
+            ui.horizontal(|ui| {
+                ui.label(f.display().to_string());
+                if ui.small_button("Rescan").clicked() { self.app.scan_folder(&f, false); }
+                if ui.small_button("Remove").clicked() { self.app.remove_music_folder(&f); }
+            });
+        }
+        if ui.button("Add music folder…").clicked() { self.app.ui.dialog = Some(FileDialog::new(Purpose::AddFolder, None)); }
+    }
+    /// Settings → Decks: deck area, waveform style and timing, backspin
+    fn settings_decks(&mut self, ui: &mut Ui) {
+        let mut dv = self.app.store.settings.deck_view.clone();
+        let dv_name = |v: &str| match v { "screens" => "Screens only", "controls" => "Screens and buttons", _ => "Auto (screens while a controller is connected)" };
+        egui::ComboBox::from_label("Deck area").selected_text(dv_name(&dv)).show_ui(ui, |ui| {
+            for v in ["auto", "screens", "controls"] { ui.selectable_value(&mut dv, v.to_string(), dv_name(v)); }
+        });
+        if dv != self.app.store.settings.deck_view { self.app.store.settings.deck_view = dv; self.app.store.dirty_settings = true; }
+        let mut ws = self.app.store.settings.wave_style.clone();
+        egui::ComboBox::from_label("Waveform").selected_text(if ws == "3band" { "3-band" } else { "RGB (red lows, green mids, blue highs)" }).show_ui(ui, |ui| {
+            ui.selectable_value(&mut ws, "rgb".to_string(), "RGB (red lows, green mids, blue highs)");
+            ui.selectable_value(&mut ws, "3band".to_string(), "3-band");
+        });
+        if ws != self.app.store.settings.wave_style { self.app.store.settings.wave_style = ws; self.app.store.dirty_settings = true; }
+        let mut spin = self.app.store.settings.spin;
+        let spins = [(0.8, "Short"), (1.6, "Medium"), (2.5, "Long"), (4.0, "Extra long"), (7.0, "Ridiculous")];
+        egui::ComboBox::from_label("Backspin (spin time after a fling)").selected_text(spins.iter().find(|x| (x.0 - spin).abs() < 1e-6).map(|x| x.1).unwrap_or("Long")).show_ui(ui, |ui| {
+            for (v, l) in spins { ui.selectable_value(&mut spin, v, l); }
+        });
+        if (spin - self.app.store.settings.spin).abs() > 1e-9 { self.app.set_spin(spin); }
+        ui.horizontal(|ui| {
+            let r = ui.add(egui::Slider::new(&mut self.app.store.settings.wave_offset_ms, -100.0..=100.0).step_by(1.0).suffix(" ms").text("Waveform timing"));
+            if r.changed() { self.app.store.dirty_settings = true; }
+            r.on_hover_text("Cratebox already allows for the sound card's delay. If the waveform still runs ahead of what you hear, move this up; if it trails, move it down");
+        });
+    }
+    /// Settings → Sound: outputs, headphones, buffer, recordings
+    fn settings_sound(&mut self, ui: &mut Ui) {
+        let cur = self.app.audio.device.clone();
+        let mut pick = cur.clone();
+        egui::ComboBox::from_label("Output").width(300.0).selected_text(if cur.is_empty() { "System default".to_string() } else { short_dev(&cur) }).show_ui(ui, |ui| {
+            ui.selectable_value(&mut pick, String::new(), "System default");
+            for d in &self.app.outputs { ui.selectable_value(&mut pick, d.name.clone(), format!("{}  ({} ch)", d.name, d.max_channels)); }
+        });
+        if pick != cur { self.app.set_output(&pick); }
+        if ui.small_button("Refresh devices").clicked() { self.app.refresh_outputs(); }
+        let mut hp = self.app.store.settings.hp_mode.clone();
+        let modes = [("auto", "Auto (FLX4: channels 3–4)"), ("quad", "Same device, channels 3–4"), ("split", "Split: master left, cue right"), ("device", "Another device"), ("off", "Off")];
+        egui::ComboBox::from_label("Headphones").selected_text(modes.iter().find(|m| m.0 == hp).map(|m| m.1).unwrap_or("Auto")).show_ui(ui, |ui| {
+            for (v, l) in modes { ui.selectable_value(&mut hp, v.to_string(), l); }
+        });
+        if hp != self.app.store.settings.hp_mode { self.app.store.settings.hp_mode = hp.clone(); self.app.store.dirty_settings = true; self.app.apply_headphones(true); }
+        if hp == "device" {
+            let mut hd = self.app.store.settings.hp_device.clone();
+            egui::ComboBox::from_label("Headphone device").width(300.0).selected_text(if hd.is_empty() { "System default".into() } else { short_dev(&hd) }).show_ui(ui, |ui| {
+                ui.selectable_value(&mut hd, String::new(), "System default");
+                for d in &self.app.outputs { ui.selectable_value(&mut hd, d.name.clone(), d.name.clone()); }
+            });
+            if hd != self.app.store.settings.hp_device { self.app.store.settings.hp_device = hd; self.app.store.dirty_settings = true; self.app.apply_headphones(true); }
+        }
+        ui.label(egui::RichText::new(&self.app.hp_note).size(11.5).color(MUTED()));
+        let mut buf = self.app.store.settings.buffer;
+        egui::ComboBox::from_label("Audio buffer (lower = tighter jog, higher = no dropouts)").selected_text(format!("{buf} samples ({:.1} ms)", buf as f64 / self.app.audio.sr * 1000.0)).show_ui(ui, |ui| {
+            for b in [128u32, 256, 512, 1024, 2048] { ui.selectable_value(&mut buf, b, format!("{b} samples ({:.1} ms)", b as f64 / self.app.audio.sr * 1000.0)); }
+        });
+        if buf != self.app.store.settings.buffer { self.app.store.settings.buffer = buf; self.app.store.dirty_settings = true; let d = self.app.audio.device.clone(); self.app.set_output(&d); }
+        ui.label(egui::RichText::new(format!("{} Hz, {} channels", self.app.audio.sr, self.app.audio.channels)).size(11.0).color(DIM()));
+        ui.horizontal(|ui| {
+            ui.label("Recordings go to:");
+            let r = ui.add(egui::TextEdit::singleline(&mut self.app.store.settings.rec_dir).hint_text(crate::recorder::default_dir().display().to_string()).desired_width(260.0));
+            if r.changed() { self.app.store.dirty_settings = true; }
+        }).response.on_hover_text("● REC in the header records the master (after the limiter) to a 16-bit WAV here");
+    }
+    /// Settings → Controller: MIDI device, mapping, learn, layer buttons
+    fn settings_controller(&mut self, ui: &mut Ui) {
+        let ports = self.app.midi_io.ports.clone();
+        let mut pin = self.app.midi_io.name.clone();
+        egui::ComboBox::from_label("Controller").width(300.0).selected_text(if pin.is_empty() { "No controller connected".into() } else { pin.clone() }).show_ui(ui, |ui| {
+            if ports.is_empty() { ui.label("No MIDI devices"); }
+            for p in &ports { ui.selectable_value(&mut pin, p.clone(), p); }
+        });
+        if pin != self.app.midi_io.name && !pin.is_empty() { self.app.pick_midi_in(&pin); }
+        let mut prof = self.app.midi.profile.to_string();
+        let profs = midi::profiles();
+        egui::ComboBox::from_label("Mapping").width(300.0).selected_text(profs.iter().find(|p| p.id == prof).map(|p| p.name).unwrap_or("")).show_ui(ui, |ui| {
+            for p in &profs { ui.selectable_value(&mut prof, p.id.to_string(), p.name); }
+        });
+        if prof != self.app.midi.profile { self.app.pick_profile(&prof); }
+        let info = self.app.midi.profile_info();
+        let n = self.app.midi.learned.len();
+        ui.label(egui::RichText::new(format!("{}{}", midi::src_note(info.src), if n > 0 { format!(" You've mapped {n} control{} yourself.", if n == 1 { "" } else { "s" }) } else { String::new() })).size(11.5).color(MUTED()));
+        ui.horizontal(|ui| {
+            if ui.button("MIDI learn…").clicked() { self.app.start_learn(); }
+            if ui.button("Forget learned controls").clicked() { self.app.clear_learned(); }
+            if ui.button("Export mapping…").clicked() { self.app.ui.dialog = Some(FileDialog::new(Purpose::ExportMapping, None)); }
+            if ui.button("Import mapping…").clicked() { self.app.ui.dialog = Some(FileDialog::new(Purpose::ImportMapping, None)); }
+        });
+        ui.horizontal(|ui| {
+            if ui.button("Set up layer buttons…").on_hover_text("Pick the two buttons that switch the controller's sides between decks 1⇄3 and 2⇄4 (FLX4: SMART CFX and SMART FADER)").clicked() {
+                self.app.midi.setup_layer_buttons();
+                self.app.ui.settings_open = false;
+            }
+            ui.label(egui::RichText::new("4-deck mode: which buttons switch sides").size(11.0).color(DIM()));
+        });
+    }
+    /// Settings → rekordbox: sticks, XML, grids
+    fn settings_rekordbox(&mut self, ui: &mut Ui) {
+        ui.horizontal(|ui| {
+            if ui.button("Open USB / SD…").clicked() { self.app.ui.dialog = Some(FileDialog::new(Purpose::OpenUsb, None)); }
+            if ui.button("Import XML…").clicked() { self.app.ui.dialog = Some(FileDialog::new(Purpose::ImportXml, None)); }
+            if ui.button("Export XML…").clicked() { self.app.ui.dialog = Some(FileDialog::new(Purpose::ExportXml, None)); }
+        });
+        ui.label(egui::RichText::new("Tracks that are also on a plugged-in rekordbox stick play on rekordbox's grid.").size(11.0).color(MUTED()));
+        if ui.button("Compare Cratebox's grids with the stick").on_hover_text("Checks where Cratebox puts bar 1 against rekordbox, for tracks on both (writes grid-compare.log)").clicked() { self.app.compare_grids(); }
+        ui.horizontal(|ui| {
+            ui.label("Export paths as if the music folders were in:");
+            let r = ui.add(egui::TextEdit::singleline(&mut self.app.store.settings.base_path).hint_text("(leave empty: their real location)").desired_width(220.0));
+            if r.changed() { self.app.store.dirty_settings = true; }
+        }).response.on_hover_text("For moving the XML to another computer, e.g. C:\\Users\\you\\Music");
+        ui.label(egui::RichText::new(format!("Library data: {}", crate::store::data_dir().display())).size(11.0).color(DIM()));
+    }
+
+    /// Settings → Wi-Fi: on/off, networks (scan, join with a password, disconnect, forget)
+    fn settings_wifi(&mut self, ui: &mut Ui) {
+        let net = self.net.get_or_insert_with(crate::net::Net::new);
+        net.tick();
+        let v = net.snapshot();
+        if v.no_nmcli { ui.label(egui::RichText::new("Wi-Fi settings need NetworkManager (nmcli), which Cratebox OS has.").color(MUTED())); return; }
+        let mut cmd = None;
+        ui.horizontal(|ui| {
+            let mut on = v.wifi_on;
+            if toggle(ui, &mut on, "Wi-Fi").changed() { cmd = Some(crate::net::Cmd::WifiRadio(on)); }
+            if v.wifi_on && ui.add_enabled(v.busy.is_none(), egui::Button::new("Scan")).on_hover_text("Look for networks again (a few seconds)").clicked() { cmd = Some(crate::net::Cmd::WifiScan); }
+        });
+        net_status(ui, &v);
+        if v.wifi_on {
+            if v.wifi.is_empty() { ui.label(egui::RichText::new("No networks yet: press Scan.").color(MUTED())); }
+            for w in &v.wifi {
+                ui.horizontal(|ui| {
+                    ui.label(egui::RichText::new(format!("{:>3}%", w.signal)).font(mono(10.5)).color(if w.signal < 30 { RED } else { MUTED() }));
+                    ui.label(if w.secure { "🔒" } else { "  " });
+                    ui.label(egui::RichText::new(&w.ssid).color(if w.active { GREEN } else { FG() }).strong());
+                    ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                        if w.active {
+                            if ui.button("Disconnect").clicked() { cmd = Some(crate::net::Cmd::WifiDisconnect(w.ssid.clone())); }
+                        } else if ui.add_enabled(v.busy.is_none(), egui::Button::new("Connect")).clicked() {
+                            if w.secure && !w.saved { self.wifi_pw = Some((w.ssid.clone(), String::new())); }
+                            else { cmd = Some(crate::net::Cmd::WifiConnect { ssid: w.ssid.clone(), password: None }); }
+                        }
+                        if w.saved && ui.small_button("Forget").on_hover_text("Delete the saved password").clicked() { cmd = Some(crate::net::Cmd::WifiForget(w.ssid.clone())); }
+                    });
+                });
+                // the password box opens under the network being joined
+                if let Some((ssid, pw)) = &mut self.wifi_pw {
+                    if *ssid == w.ssid {
+                        let mut go = false;
+                        let mut cancel = false;
+                        ui.horizontal(|ui| {
+                            ui.add_space(40.0);
+                            let r = ui.add(egui::TextEdit::singleline(pw).password(true).hint_text("Password").desired_width(220.0));
+                            if !r.has_focus() && pw.is_empty() { r.request_focus(); }
+                            go = r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
+                            go |= ui.button("Join").clicked();
+                            cancel = ui.button("Cancel").clicked();
+                        });
+                        if go && !pw.is_empty() { cmd = Some(crate::net::Cmd::WifiConnect { ssid: ssid.clone(), password: Some(pw.clone()) }); cancel = true; }
+                        if cancel { self.wifi_pw = None; }
+                    }
+                }
+            }
+        }
+        if let (Some(c), Some(n)) = (cmd, &self.net) { n.send(c); }
+    }
+    /// Settings → Bluetooth: on/off, devices (scan, pair, connect, disconnect, forget)
+    fn settings_bluetooth(&mut self, ui: &mut Ui) {
+        let net = self.net.get_or_insert_with(crate::net::Net::new);
+        net.tick();
+        let v = net.snapshot();
+        if v.no_bluetoothctl { ui.label(egui::RichText::new("Bluetooth settings need BlueZ (bluetoothctl), which Cratebox OS has.").color(MUTED())); return; }
+        let mut cmd = None;
+        ui.horizontal(|ui| {
+            let mut on = v.bt_on;
+            if toggle(ui, &mut on, "Bluetooth").changed() { cmd = Some(crate::net::Cmd::BtPower(on)); }
+            if v.bt_on && ui.add_enabled(v.busy.is_none(), egui::Button::new("Scan")).on_hover_text("Look for devices for 10 s (put yours in pairing mode first)").clicked() { cmd = Some(crate::net::Cmd::BtScan); }
+        });
+        ui.label(egui::RichText::new("HEAT pairs the Puffco by itself; Bluetooth headphones add delay, so cue on wired ones.").size(11.0).color(DIM()));
+        net_status(ui, &v);
+        if v.bt_on {
+            if v.bt.is_empty() { ui.label(egui::RichText::new("No devices yet: press Scan.").color(MUTED())); }
+            for d in &v.bt {
+                ui.horizontal(|ui| {
+                    ui.label(egui::RichText::new(&d.name).color(if d.connected { GREEN } else { FG() }).strong());
+                    ui.label(egui::RichText::new(if d.connected { "connected" } else if d.paired { "paired" } else { "" }).size(11.0).color(MUTED()));
+                    ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                        let free = v.busy.is_none();
+                        if d.connected { if ui.button("Disconnect").clicked() { cmd = Some(crate::net::Cmd::BtDisconnect(d.mac.clone())); } }
+                        else if d.paired { if ui.add_enabled(free, egui::Button::new("Connect")).clicked() { cmd = Some(crate::net::Cmd::BtConnect(d.mac.clone())); } }
+                        else if ui.add_enabled(free, egui::Button::new("Pair")).clicked() { cmd = Some(crate::net::Cmd::BtPair(d.mac.clone())); }
+                        if d.paired && ui.small_button("Forget").clicked() { cmd = Some(crate::net::Cmd::BtForget(d.mac.clone())); }
+                    });
+                });
+            }
+        }
+        if let (Some(c), Some(n)) = (cmd, &self.net) { n.send(c); }
     }
 
     fn learn_bar(&mut self, ui: &mut Ui) {
@@ -2230,6 +2366,31 @@ fn phase_tag(d: &crate::deck::Deck) -> Option<(String, Color32)> {
     let pe = if d.sync { d.phase_err? } else { return None };
     let c = if pe.abs() < 0.006 { Color32::from_rgb(0x3d, 0xdc, 0x84) } else if pe.abs() < 0.02 { Color32::from_rgb(0xff, 0xb0, 0x20) } else { Color32::from_rgb(0xff, 0x3b, 0x55) };
     Some((format!("{}{} ms", if pe >= 0.0 { "+" } else { "−" }, (pe.abs() * 1000.0 + 0.5).floor() as i64), c))
+}
+
+/// Settings tabs: icon and name (the order matches Gui::settings)
+const SETTINGS_TABS: [(Icon, &str); 8] = [(Icon::Palette, "Look"), (Icon::List, "Library"), (Icon::Deck, "Decks"), (Icon::Speaker, "Sound"),
+    (Icon::Knob, "Controller"), (Icon::Wifi, "Wi-Fi"), (Icon::Bluetooth, "Bluetooth"), (Icon::Usb, "rekordbox")];
+const TAB_WIFI: usize = 5;
+
+/// an on/off switch with its name
+fn toggle(ui: &mut Ui, on: &mut bool, label: &str) -> Response {
+    let (r, mut resp) = ui.allocate_exact_size(vec2(40.0, 22.0), Sense::click());
+    if resp.clicked() { *on = !*on; resp.mark_changed(); }
+    let t = ui.ctx().animate_bool(resp.id, *on);
+    ui.painter().rect_filled(r, 11.0, if *on { GREEN } else { RAISE() });
+    ui.painter().circle_filled(pos2(r.left() + 11.0 + t * 18.0, r.center().y), 8.0, FG());
+    ui.label(egui::RichText::new(format!("{label} {}", if *on { "on" } else { "off" })).strong());
+    resp
+}
+
+/// what the Wi-Fi / Bluetooth worker is doing, or its last result
+fn net_status(ui: &mut Ui, v: &crate::net::NetView) {
+    ui.horizontal(|ui| {
+        if let Some(b) = &v.busy { ui.spinner(); ui.label(egui::RichText::new(b).color(MUTED())); }
+        else if !v.note.is_empty() { ui.label(egui::RichText::new(&v.note).size(11.5).color(MUTED())); }
+    });
+    if v.busy.is_some() { ui.ctx().request_repaint_after(std::time::Duration::from_millis(100)); }
 }
 
 /// a gain as a dB readout: "+1.6", "-12.0", "-∞"
