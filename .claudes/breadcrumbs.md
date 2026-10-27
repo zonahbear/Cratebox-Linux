@@ -106,3 +106,4 @@
 - 2026-10-27 eve: Jonah's video (IMG_9300) of waveform stutter: measured 13.6±1.6 px per 30fps camera frame, no long freezes. Fix: frame clock in deck.rs (refresh-quantized), eased vis_delay in App, show_fps header readout. Real cause on the MacBook unconfirmed until Jonah reports the FPS readout.
 - 2026-10-27 eve: lanes moved to GPU tiles (WaveCache) after Jonah's bug report on whole-pixel stepping; Xvfb llvmpipe 46→49 fps.
 - 2026-10-27 eve: SOULSEEK button (cratebox-soulseek), framed resizable windows (openbox-rc), tabbed Settings, Wi-Fi/Bluetooth panels (src/net.rs, nmcli/bluetoothctl), globe spike fix. Next: Jonah asked for a final review pass (perf, bugs, UI, layout).
+- 2026-10-27 eve: review pass #44: overviews → textures (OverviewCache), wave_col mesh path removed, net refresh coalescing, Sound tab width.

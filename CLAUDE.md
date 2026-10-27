@@ -128,7 +128,7 @@ distro/            Cratebox OS ISO: build-iso.sh remasters Lubuntu 26.04.1 (laye
   gives every window but Cratebox a frame at 80%, resizable. Settings is tabbed (SETTINGS_TABS in ui.rs, one fn per tab).
 - egui closed_line: never repeat the first point at the end (the zero-length segment drew a spike through the globe icon).
 - Binary refuses to run on CPUs without AVX2/FMA/BMI2 and says how to rebuild.
-- Scrolling lanes are GPU tiles (widgets::WaveCache, 512 px at normal speed, linear filtering, drawn at fractional x,
+- Scrolling lanes are GPU tiles (widgets::WaveCache; overviews likewise: OverviewCache, Gui.ov_cache, 512 px at normal speed, linear filtering, drawn at fractional x,
   stretched for tempo; Gui.lane_cache). Don't go back to whole-pixel meshes: that stepped 4/5 px a frame.
 - Waveforms are timed by deck::frame_tick/frame_time (whole refresh intervals, not wall clock at update()); App eases
   vis_delay. Settings → Look → Show frame rate puts FPS/missed refreshes in the header; CRATEBOX_PROFILE=1 also logs them.

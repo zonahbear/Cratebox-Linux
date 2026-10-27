@@ -35,6 +35,8 @@ pub struct Gui {
     wifi_pw: Option<(String, String)>,
     /// each lane's waveform tiles on the GPU (widgets::WaveCache)
     lane_cache: [WaveCache; DECKS],
+    /// each deck's overview pictures: [lane, deck screen]
+    ov_cache: [[OverviewCache; 2]; DECKS],
     /// a PAD FX pad held with the mouse (deck, pad)
     pad_held: Option<(usize, usize)>,
     pub frames: u64,
@@ -93,7 +95,7 @@ impl Gui {
         app.midi_io.set_wake(wake.clone());
         app.watch_drives();
         let remote = crate::remote::listen(move || wake());
-        Gui { app, deck_rects: [Rect::NOTHING; DECKS], jog_last: [None; DECKS], lane_drag: [None; DECKS], lane_cache: Default::default(), settings_tab: 0, net: None, wifi_pw: None, pad_held: None, frames: 0, test_shot: None,
+        Gui { app, deck_rects: [Rect::NOTHING; DECKS], jog_last: [None; DECKS], lane_drag: [None; DECKS], lane_cache: Default::default(), ov_cache: Default::default(), settings_tab: 0, net: None, wifi_pw: None, pad_held: None, frames: 0, test_shot: None,
             rects: Default::default(), uitest: crate::uitest::UiTest::from_env(), heat_open: false, power_open: false, sys: SysStats::new(), battery: (std::time::Instant::now().checked_sub(std::time::Duration::from_secs(60)).unwrap_or_else(std::time::Instant::now), read_battery()), power_confirm: None, bat_alerted: 100, bat_dialog: None, wave_browse: None, last_sel: usize::MAX, heat_paste: String::new(), hitting: false, focus_search: false, keys_open: false, remote, seen_loads: 0, pl_names: (0, Default::default()) }
     }
 
@@ -282,7 +284,7 @@ impl Gui {
         // the whole track: click to jump, drag to scrub
         let or = ui.interact(ov, ui.id().with(("ov", i)), Sense::click_and_drag());
         self.reg(format!("deck{i}.overview"), ov);
-        paint_overview(ui.painter(), ov, &self.app.decks[i], rgb);
+        paint_overview(ui.painter(), ov, &self.app.decks[i], rgb, &mut self.ov_cache[i][0]);
         let frozen = self.app.learning();
         if !frozen && (or.dragged() || or.clicked() || or.drag_started()) {
             if let Some(p) = or.interact_pointer_pos() {
@@ -579,7 +581,7 @@ impl Gui {
                 top += small + 4.0;
             }
             let ov = Rect::from_min_max(pos2(mid.left(), top + 2.0), pos2(mid.right(), mid.bottom().min(top + 2.0 + 56.0)));
-            if ov.height() >= 12.0 { paint_overview(&p, ov, d, self.app.store.settings.wave_style == "rgb"); }
+            if ov.height() >= 12.0 { paint_overview(&p, ov, d, self.app.store.settings.wave_style == "rgb", &mut self.ov_cache[i][1]); }
         }
         // bottom line: beat dots, bar.beat, phrase
         if loaded && d.ana.is_some() && y3 > y2 + small + 2.0 {
@@ -1444,7 +1446,7 @@ impl Gui {
     fn settings_sound(&mut self, ui: &mut Ui) {
         let cur = self.app.audio.device.clone();
         let mut pick = cur.clone();
-        egui::ComboBox::from_label("Output").width(300.0).selected_text(if cur.is_empty() { "System default".to_string() } else { short_dev(&cur) }).show_ui(ui, |ui| {
+        egui::ComboBox::from_label("Output").width(260.0).selected_text(if cur.is_empty() { "System default".to_string() } else { short_dev(&cur) }).show_ui(ui, |ui| {
             ui.selectable_value(&mut pick, String::new(), "System default");
             for d in &self.app.outputs { ui.selectable_value(&mut pick, d.name.clone(), format!("{}  ({} ch)", d.name, d.max_channels)); }
         });
@@ -1466,11 +1468,11 @@ impl Gui {
         }
         ui.label(egui::RichText::new(&self.app.hp_note).size(11.5).color(MUTED()));
         let mut buf = self.app.store.settings.buffer;
-        egui::ComboBox::from_label("Audio buffer (lower = tighter jog, higher = no dropouts)").selected_text(format!("{buf} samples ({:.1} ms)", buf as f64 / self.app.audio.sr * 1000.0)).show_ui(ui, |ui| {
+        egui::ComboBox::from_label("Audio buffer").selected_text(format!("{buf} samples ({:.1} ms)", buf as f64 / self.app.audio.sr * 1000.0)).show_ui(ui, |ui| {
             for b in [128u32, 256, 512, 1024, 2048] { ui.selectable_value(&mut buf, b, format!("{b} samples ({:.1} ms)", b as f64 / self.app.audio.sr * 1000.0)); }
         });
         if buf != self.app.store.settings.buffer { self.app.store.settings.buffer = buf; self.app.store.dirty_settings = true; let d = self.app.audio.device.clone(); self.app.set_output(&d); }
-        ui.label(egui::RichText::new(format!("{} Hz, {} channels", self.app.audio.sr, self.app.audio.channels)).size(11.0).color(DIM()));
+        ui.label(egui::RichText::new(format!("{} Hz, {} channels. Lower buffer = tighter jog; higher = safer from dropouts.", self.app.audio.sr, self.app.audio.channels)).size(11.0).color(DIM()));
         ui.horizontal(|ui| {
             ui.label("Recordings go to:");
             let r = ui.add(egui::TextEdit::singleline(&mut self.app.store.settings.rec_dir).hint_text(crate::recorder::default_dir().display().to_string()).desired_width(260.0));

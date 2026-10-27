@@ -60,7 +60,9 @@ impl Net {
     pub fn send(&self, c: Cmd) { let _ = self.tx.send(c); }
     /// call each frame while the panel is open: refreshes every 4 s
     pub fn tick(&mut self) {
-        if self.last.is_none_or(|t| t.elapsed() > Duration::from_secs(4)) { self.last = Some(Instant::now()); self.send(Cmd::Refresh); }
+        // (not while a scan or pairing holds the worker: refreshes would only queue up behind it)
+        let busy = self.view.lock().map(|v| v.busy.is_some()).unwrap_or(false);
+        if !busy && self.last.is_none_or(|t| t.elapsed() > Duration::from_secs(4)) { self.last = Some(Instant::now()); self.send(Cmd::Refresh); }
     }
     pub fn snapshot(&self) -> NetView { self.view.lock().map(|v| v.clone()).unwrap_or_default() }
 }
