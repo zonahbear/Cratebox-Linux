@@ -20,7 +20,8 @@ src/app.rs         App: decks, mixer, library, playlists, controller, background
 src/ui.rs          the window, XDJ-style, sized for 1152×720 pt (MacBook10,1 at 2x): header (REC, WAVE, 4 DECKS,
                    HEAT ▾, ⚙), stacked waveform lanes with info strips, decks either side of the mixer (3 1 2 4
                    + BEAT FX), library; WAVE = only the lanes; BROWSE = lanes + big library; HEAT panel
-src/widgets.rs     custom-drawn knobs, faders, jogs, meters, waveform painters
+src/widgets.rs     custom-drawn knobs, faders, jogs, meters, waveform painters, header icons; colour THEMES
+                   (BG()/FG()/… are functions of the theme; CUE/LOOP/GREEN/RED stay consts)
 src/dialog.rs      egui file/folder picker (no GTK/portal)
 src/engine.rs      audio engine: 2 players → mixer; commands in by channel, try-locked snapshot out
 src/player.rs      deck player on the audio thread, WSOLA keylock; port of the web AudioWorklet (128-sample blocks)

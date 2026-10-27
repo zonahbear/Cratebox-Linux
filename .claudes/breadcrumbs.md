@@ -100,3 +100,4 @@
 - Rekordbox grid for stick twins (adopt_rb_grid) + Compare grids button (grid-compare.log). Half-bar-late: synthetic tracks are correct; needs Jonah's compare summary to tune analysis.rs downbeat vote (W_KS/W_NOV/W_START).
 - Waveform timing: audio_io measures output latency per callback (Beat.lat); App sets Deck.vis_delay = latency - 1 frame + settings.wave_offset_ms; vis_now subtracts it.
 - GLOW (Puffco lantern rainbow following the music) in heat.rs/app.rs glow_tick; HEAT panel checkbox + FX knob mode. Lantern paths unverified on Proxy.
+- Themes (widgets::THEMES: Night, Midnight, Ember, Neon, Mono; settings.theme; Settings → Look), header icon buttons (Icon::Folder/Globe/List/Wave), wording pass.
