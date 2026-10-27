@@ -47,6 +47,8 @@ pub struct Settings {
     pub lib_h: f32,
     pub tree_w: f32,
     pub browse: bool,
+    /// player view with the bottom library closed (the pop-up browser stands in for it)
+    pub lib_hidden: bool,
     pub out_device: String,
     /// "auto" (4-channel device -> quad, else master only), "quad", "split", "device", "off"
     pub hp_mode: String,
@@ -67,7 +69,7 @@ impl Default for Settings {
         Settings {
             folders: vec![], devices: vec![], bpm_range: 3, bpm_lo: 70.0, bpm_hi: 180.0, deck_view: "auto".into(), wave_style: "rgb".into(), spin: 2.5, mt: vec![true; 4], four: false, wave: false,
             bfx_fx: "ECHO".into(), bfx_depth: 0.55, bfx_ch: 0, bfx_beats: HashMap::new(), rec_dir: String::new(),
-            heat_curves: HashMap::new(), heat_last: crate::heat::DEFAULT_NAME.into(), heat_hold_f: 500.0, heat_puff_full: 0.0, heat_device: String::new(), heat_models: HashMap::new(), zoom: 8.0, lib_h: 0.0, tree_w: 0.0, browse: false,
+            heat_curves: HashMap::new(), heat_last: crate::heat::DEFAULT_NAME.into(), heat_hold_f: 500.0, heat_puff_full: 0.0, heat_device: String::new(), heat_models: HashMap::new(), zoom: 8.0, lib_h: 0.0, tree_w: 0.0, browse: false, lib_hidden: false,
             out_device: String::new(), hp_mode: "auto".into(), hp_device: String::new(), midi_in: String::new(), profile_for: HashMap::new(),
             learned: HashMap::new(), base_path: String::new(), pl_open: vec![], bad: vec![], buffer: 256,
         }

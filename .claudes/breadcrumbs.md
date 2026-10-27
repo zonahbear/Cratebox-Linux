@@ -75,3 +75,7 @@
 - OFF menu (exit to login / restart / shut down), F11 full screen, ms beat-lock tag, smoothed waveform clock (deck.vis_now) + pixel-locked lane columns, rekordbox grids kept (grid_manual), USB copy (src/usbcopy.rs, ↓ on stick rows).
 - OS files ship via app-latest os-files.tar.gz (cratebox-update installs them): kiosk session exits to SDDM, Xsession.d/45cratebox-hidpi (Cratebox 2x, desktop Xft.dpi 168, Jonah confirmed).
 - Open: Alt+F4 landed on a text console on the installed system (SDDM not coming back?), awaiting `systemctl status display-manager`.
+
+## 2026-10-27 03:30Z
+- Shipped: header FIREFOX (distro/overlay/usr/bin/cratebox-firefox: firejail --private box, first run installs Mozilla-apt firefox + firejail) and FILES (pcmanfm-qt), Wi-Fi/BT forced on in kiosk session + BlueZ AutoEnable in ISO, selected-deck strobe, LIB toggle, HEAT forget-on-auth-fail.
+- Next: HEAT auto-reconnect/longer retries (heat.log shows LE timeouts, bond fine), master+trim readouts, hold SYNC = master, REC arms until play, 3-deck mode, Wi-Fi/BT + net rates in header, PUFF theremin, Soulseek in-app.
