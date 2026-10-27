@@ -65,7 +65,6 @@ pub struct Gui {
 
 const ROW: f32 = 22.0;
 const GAP: f32 = 4.0;
-const PANEL_D: Color32 = Color32::from_rgb(0x10, 0x12, 0x16);
 
 /// a child Ui laid out left to right inside `r`
 fn row_ui(ui: &mut Ui, r: Rect) -> Ui {
@@ -78,8 +77,9 @@ pub fn mixer_order(n: usize) -> Vec<usize> { match n { 4 => vec![2, 0, 1, 3], 3 
 
 impl Gui {
     pub fn new(cc: &eframe::CreationContext<'_>) -> Gui {
-        style(&cc.egui_ctx);
         let mut app = App::new();
+        set_theme(&app.store.settings.theme);
+        style(&cc.egui_ctx);
         let ctx = cc.egui_ctx.clone();
         let wake: std::sync::Arc<dyn Fn() + Send + Sync> = std::sync::Arc::new(move || ctx.request_repaint());
         app.repaint = Some(wake.clone());
@@ -118,7 +118,7 @@ impl Gui {
     fn header(&mut self, ui: &mut Ui) {
         ui.horizontal_centered(|ui| {
             ui.spacing_mut().item_spacing.x = 0.0;
-            ui.label(egui::RichText::new("CRATE").font(bold(17.0)).color(FG));
+            ui.label(egui::RichText::new("CRATE").font(bold(17.0)).color(FG()));
             ui.label(egui::RichText::new("BOX").font(bold(17.0)).color(deck_color(0)));
             ui.spacing_mut().item_spacing.x = 5.0;
             ui.add_space(8.0);
@@ -131,7 +131,7 @@ impl Gui {
             pill(ui, &name, on).on_hover_text(self.app.midi_io.error.clone().unwrap_or_default());
             let ch = self.app.audio.channels;
             let out = if self.app.audio.running() { if self.app.audio.device.is_empty() { "Default output".to_string() } else { short_dev(&self.app.audio.device) } } else { "No sound output".into() };
-            let out = if compact { if self.app.audio.running() { out.chars().take(10).collect() } else { "NO OUT".to_string() } } else { out };
+            let out = if compact { if self.app.audio.running() { out.chars().take(10).collect() } else { "NO SOUND".to_string() } } else { out };
             pill(ui, &format!("{out} · {ch} ch"), self.app.audio.running() && ch >= 4).on_hover_text(&self.app.hp_note);
             ui.add_space(4.0);
             let st = self.app.status_text().to_string();
@@ -141,18 +141,18 @@ impl Gui {
                     let top = ui.max_rect().bottom() + 6.0;
                     egui::Area::new(egui::Id::new("status_toast")).order(egui::Order::Foreground).interactable(false)
                         .anchor(egui::Align2::CENTER_TOP, vec2(0.0, top)).show(ui.ctx(), |ui| {
-                            egui::Frame::new().fill(PANEL_D).corner_radius(4.0).inner_margin(egui::Margin::symmetric(10, 4))
-                                .show(ui, |ui| ui.label(egui::RichText::new(&st).color(FG).size(11.5)));
+                            egui::Frame::new().fill(PANEL_D()).corner_radius(4.0).inner_margin(egui::Margin::symmetric(10, 4))
+                                .show(ui, |ui| ui.label(egui::RichText::new(&st).color(FG()).size(11.5)));
                         });
                 }
                 ui.add_space((ui.available_width() - right_w).max(0.0));
             } else {
-                ui.add_sized(vec2((ui.available_width() - right_w).max(40.0), 20.0), egui::Label::new(egui::RichText::new(st).color(MUTED).size(11.5)).truncate());
+                ui.add_sized(vec2((ui.available_width() - right_w).max(40.0), 20.0), egui::Label::new(egui::RichText::new(st).color(MUTED()).size(11.5)).truncate());
             }
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                 // power, in the far right corner
                 let r = button(ui, "", vec2(26.0, 22.0), self.power_open, RED, 11.0).on_hover_text("Exit to the login screen, restart or shut down");
-                paint_power(ui.painter(), r.rect, if self.power_open { BG } else { RED });
+                paint_power(ui.painter(), r.rect, if self.power_open { BG() } else { RED });
                 self.reg("power", r.rect);
                 if r.clicked() { self.power_open = !self.power_open; self.power_confirm = None; }
                 ui.add_space(8.0);
@@ -161,35 +161,35 @@ impl Gui {
                 meter(ui, vec2(5.0, 24.0), lv[0]);
                 let mut m = self.app.mixer.master;
                 let frozen = self.app.learning();
-                let r = knob(ui, &mut m, "", FG, 0.8, 22.0, frozen);
+                let r = knob(ui, &mut m, "", FG(), 0.8, 22.0, frozen);
                 if !self.learn(ui, &r, "master", -1) && r.changed() { self.app.mixer.master = m; self.app.send_mixer(); }
-                ui.label(egui::RichText::new(db_text(crate::engine::master_level_gain(self.app.mixer.master as f64))).font(mono(10.0)).color(FG));
-                ui.label(egui::RichText::new("MASTER").size(9.5).color(MUTED));
+                ui.label(egui::RichText::new(db_text(crate::engine::master_level_gain(self.app.mixer.master as f64))).font(mono(10.0)).color(FG()));
+                ui.label(egui::RichText::new("MASTER").size(9.5).color(MUTED()));
                 ui.add_space(6.0);
                 let r = button(ui, "⚙", vec2(26.0, 22.0), self.app.ui.settings_open, deck_color(0), 13.0).on_hover_text("Settings");
                 self.reg("settings", r.rect);
                 if r.clicked() { self.app.ui.settings_open = !self.app.ui.settings_open; }
                 let hl = self.app.heat.label();
                 let lit = self.app.heat.lit();
-                let w = ui.painter().layout_no_wrap(hl.clone(), prop(11.5), FG).size().x + 26.0;
+                let w = ui.painter().layout_no_wrap(hl.clone(), prop(11.5), FG()).size().x + 26.0;
                 let r = button(ui, &format!("{hl} ▾"), vec2(w, 22.0), lit, CUE, 11.5).on_hover_text("TrueCurve heat curves for a Puffco Peak Pro / Proxy");
                 self.reg("heat", r.rect);
                 if r.clicked() { self.heat_open = !self.heat_open; }
                 let n = self.app.deck_count();
-                let r = button(ui, &format!("{n} DECKS"), vec2(62.0, 22.0), n > 2, FG, 11.5)
+                let r = button(ui, &format!("{n} DECKS"), vec2(62.0, 22.0), n > 2, FG(), 11.5)
                     .on_hover_text("2 → 3 → 4 decks. 3: decks 1 and 3 share the left side (layer button / SMART CFX), 2 on the right. 4: 3 and 4 on the outer channels");
                 self.reg("four", r.rect);
                 if r.clicked() { self.app.set_decks(if n == 4 { 2 } else { n + 1 }); }
                 let wave = self.app.store.settings.wave;
-                let r = button(ui, "WAVE", vec2(50.0, 22.0), wave, deck_color(2), 11.5).on_hover_text("Just the waveforms");
+                let r = icon_button(ui, Icon::Wave, wave, deck_color(2)).on_hover_text("WAVE: just the waveforms (F1)");
                 self.reg("wave", r.rect);
                 if r.clicked() { self.app.store.settings.wave = !wave; self.app.store.dirty_settings = true; }
                 let lib = !self.app.store.settings.lib_hidden;
-                let r = button(ui, "LIB", vec2(36.0, 22.0), lib, FG, 11.5).on_hover_text("Show or close the library under the decks (closed: scroll to pop it up)");
+                let r = icon_button(ui, Icon::List, lib, FG()).on_hover_text("Library under the decks: show or hide (hidden: scroll to pop it up)");
                 self.reg("lib", r.rect);
                 if r.clicked() { self.app.store.settings.lib_hidden = lib; self.app.store.dirty_settings = true; }
                 // quick launchers: Chrome (cratebox-web, from os-files) and the file manager
-                let r = button(ui, "WEB", vec2(40.0, 22.0), false, FG, 11.5).on_hover_text("Chrome, saving downloads into the collection");
+                let r = icon_button(ui, Icon::Globe, false, FG()).on_hover_text("WEB: Chrome, downloads go straight into the collection");
                 self.reg("web", r.rect);
                 if r.clicked() {
                     // nothing launched: say why (the helper comes with the app update)
@@ -197,7 +197,7 @@ impl Gui {
                         self.app.say(&format!("Chrome didn't start ({e}). Run Update Cratebox from the Cratebox OS menu to get the helper."), 10.0);
                     }
                 }
-                let r = button(ui, "FILES", vec2(44.0, 22.0), false, FG, 11.5).on_hover_text("Open the file manager");
+                let r = icon_button(ui, Icon::Folder, false, FG()).on_hover_text("FILES: open the file manager");
                 self.reg("files", r.rect);
                 if r.clicked() {
                     let home = dirs::home_dir().unwrap_or_default();
@@ -216,7 +216,7 @@ impl Gui {
                     // ▲ charging, ▼ on battery
                     let (txt, c) = if charging { (format!("{pc}% ▲"), Color32::from_rgb(0x5c, 0xd6, 0x7a)) }
                         else if pc <= 20 { (format!("PLUG IN {pc}% ▼"), RED) }
-                        else { (format!("{pc}% ▼"), MUTED) };
+                        else { (format!("{pc}% ▼"), MUTED()) };
                     let blink = !charging && pc <= 10;
                     let t = ui.ctx().input(|i| i.time);
                     if blink { ui.ctx().request_repaint_after(std::time::Duration::from_millis(100)); }
@@ -228,10 +228,10 @@ impl Gui {
                 if self.sys.at.elapsed().as_secs_f32() >= 2.0 { self.sys.sample(); }
                 ui.add_space(4.0);
                 // two small lines: CPU + memory over network rates, Wi-Fi signal and Bluetooth
-                let (wt, wc) = match self.sys.wifi { Some(q) => (format!("WI-FI {q}%"), if q < 30 { RED } else { MUTED }), None => ("WI-FI OFF".into(), RED) };
+                let (wt, wc) = match self.sys.wifi { Some(q) => (format!("WI-FI {q}%"), if q < 30 { RED } else { MUTED() }), None => ("WI-FI OFF".into(), RED) };
                 let l1 = format!("CPU {:.0}% · {} MB · BT {}", self.sys.cpu, self.sys.mem_mb, if self.sys.bt { "ON" } else { "OFF" });
                 let l2 = format!("↓{} ↑{} · {wt}", rate_text(self.sys.down), rate_text(self.sys.up));
-                let (c1, c2) = (if self.sys.cpu >= 85.0 || !self.sys.bt { RED } else { MUTED }, wc);
+                let (c1, c2) = (if self.sys.cpu >= 85.0 || !self.sys.bt { RED } else { MUTED() }, wc);
                 ui.with_layout(Layout::top_down(Align::Max), |ui| {
                     ui.spacing_mut().item_spacing.y = 0.0;
                     ui.add(egui::Label::new(egui::RichText::new(l1).font(mono(9.5)).color(c1)).extend()).on_hover_text("CPU use of the whole computer, memory in use, Bluetooth (HEAT needs it)");
@@ -260,7 +260,7 @@ impl Gui {
         if let Some(s) = self.side_of(i) {
             let b = Rect::from_min_size(pos2(wave.left() + 8.0, wave.top() + 4.0), vec2(16.0, 14.0));
             ui.painter().rect_filled(b, 3.0, deck_color(i));
-            ui.painter().text(b.center(), egui::Align2::CENTER_CENTER, if s == 0 { "L" } else { "R" }, bold(10.0), BG);
+            ui.painter().text(b.center(), egui::Align2::CENTER_CENTER, if s == 0 { "L" } else { "R" }, bold(10.0), BG());
         }
         // the whole track: click to jump, drag to scrub
         let or = ui.interact(ov, ui.id().with(("ov", i)), Sense::click_and_drag());
@@ -313,11 +313,11 @@ impl Gui {
         let col = deck_color(i);
         let d = &self.app.decks[i];
         let active = self.app.deck_active(i);
-        p.rect_filled(r, 0.0, PANEL_D);
+        p.rect_filled(r, 0.0, PANEL_D());
         let fs = (r.height() - 4.0).min(13.0);
         let badge = Rect::from_min_size(r.min + vec2(2.0, 1.0), vec2(r.height() + 2.0, r.height() - 2.0));
-        p.rect_filled(badge, 3.0, if active { col } else { DIM });
-        p.text(badge.center(), egui::Align2::CENTER_CENTER, format!("{}", i + 1), bold(fs), BG);
+        p.rect_filled(badge, 3.0, if active { col } else { DIM() });
+        p.text(badge.center(), egui::Align2::CENTER_CENTER, format!("{}", i + 1), bold(fs), BG());
         // right side, laid out right to left
         let mut x = r.right() - 6.0;
         let cy = r.center().y;
@@ -329,10 +329,10 @@ impl Gui {
         };
         let t = d.now();
         if d.loaded() {
-            put(&mut x, &p, format!("-{}", fmt_time(d.duration - t)), mono(fs), FG, 10.0);
+            put(&mut x, &p, format!("-{}", fmt_time(d.duration - t)), mono(fs), FG(), 10.0);
             let rg = d.range();
-            put(&mut x, &p, format!("{:+.2}% {}", (d.rate() - 1.0) * 100.0, if rg == 100.0 { "W".into() } else { format!("±{rg}") }), mono(fs - 1.5), MUTED, 8.0);
-            put(&mut x, &p, if d.bpm() > 0.0 { format!("{:.2}", d.eff_bpm()) } else { "--.--".into() }, mono(fs + 1.0), FG, 8.0);
+            put(&mut x, &p, format!("{:+.2}% {}", (d.rate() - 1.0) * 100.0, if rg == 100.0 { "W".into() } else { format!("±{rg}") }), mono(fs - 1.5), MUTED(), 8.0);
+            put(&mut x, &p, if d.bpm() > 0.0 { format!("{:.2}", d.eff_bpm()) } else { "--.--".into() }, mono(fs + 1.0), FG(), 8.0);
             let k = d.key_now();
             if let Some(c) = camelot(k) { put(&mut x, &p, c.label(), bold(fs), rgb(c.color()), 8.0); }
             let master = self.app.tempo_master() == Some(i);
@@ -344,7 +344,7 @@ impl Gui {
                 let beat = d.beat_at(t).floor().rem_euclid(4.0) as i32;
                 x -= 3.0;
                 for k in (0..4).rev() {
-                    p.circle_filled(pos2(x - 3.0, cy), 2.6, if k == beat { if k == 0 { RED } else { col } } else { LINE2 });
+                    p.circle_filled(pos2(x - 3.0, cy), 2.6, if k == beat { if k == 0 { RED } else { col } } else { LINE2() });
                     x -= 8.0;
                 }
                 x -= 4.0;
@@ -361,18 +361,18 @@ impl Gui {
         };
         let left = badge.right() + 6.0;
         let tp = p.with_clip_rect(Rect::from_min_max(pos2(left, r.top()), pos2(x.max(left), r.bottom())));
-        let g = tp.layout_no_wrap(title, bold(fs), if d.track.is_some() { FG } else { DIM });
+        let g = tp.layout_no_wrap(title, bold(fs), if d.track.is_some() { FG() } else { DIM() });
         let tw = g.size().x;
-        tp.galley(pos2(left, cy - g.size().y / 2.0), g, FG);
-        if !artist.is_empty() { tp.text(pos2(left + tw + 8.0, cy), egui::Align2::LEFT_CENTER, artist, prop(fs - 1.5), MUTED); }
+        tp.galley(pos2(left, cy - g.size().y / 2.0), g, FG());
+        if !artist.is_empty() { tp.text(pos2(left + tw + 8.0, cy), egui::Align2::LEFT_CENTER, artist, prop(fs - 1.5), MUTED()); }
     }
 
     // ===================================================================== a deck's controls
     fn deck(&mut self, ui: &mut Ui, i: usize, rect: Rect) {
         let col = deck_color(i);
         let p = ui.painter();
-        p.rect_filled(rect, 6.0, PANEL_D);
-        p.rect_stroke(rect, 6.0, Stroke::new(1.0_f32, LINE), StrokeKind::Inside);
+        p.rect_filled(rect, 6.0, PANEL_D());
+        p.rect_stroke(rect, 6.0, Stroke::new(1.0_f32, LINE()), StrokeKind::Inside);
         // the deck the controller is on (4-deck mode) gets an outline
         if self.side_of(i).is_some() { p.rect_stroke(rect, 6.0, Stroke::new(1.5_f32, col), StrokeKind::Inside); }
         // drop a track on the deck
@@ -482,9 +482,9 @@ impl Gui {
         let mode = match d.pad_mode { PadMode::HotCue => "HOT CUE", PadMode::BeatLoop => "BEAT LOOP", PadMode::BeatJump => "BEAT JUMP", PadMode::PadFx => "PAD FX 1", PadMode::PadFx2 => "PAD FX 2" };
         p.text(pos2(r_st.left() + 8.0, r_st.center().y), egui::Align2::LEFT_CENTER, mode, bold(font), col);
         let lp = match (d.lp.a, d.lp.b) { (None, _) => String::new(), (Some(_), None) => "LOOP IN…".into(), _ => format!("LOOP {}{}", frac_text(d.loop_beats()), if d.lp.on { "" } else { " (off)" }) };
-        if !lp.is_empty() { p.text(r_st.center(), egui::Align2::CENTER_CENTER, lp, bold(font), if d.lp.on { LOOP } else { MUTED }); }
+        if !lp.is_empty() { p.text(r_st.center(), egui::Align2::CENTER_CENTER, lp, bold(font), if d.lp.on { LOOP } else { MUTED() }); }
         let q = format!("{}{}", if d.quant { "Q " } else { "" }, if self.app.ui.grid_open[i] { "GRID" } else { "" });
-        p.text(pos2(r_st.right() - 8.0, r_st.center().y), egui::Align2::RIGHT_CENTER, q, bold(font), MUTED);
+        p.text(pos2(r_st.right() - 8.0, r_st.center().y), egui::Align2::RIGHT_CENTER, q, bold(font), MUTED());
     }
 
     /// the deck's screen: a small platter (drag to scratch) on the outside, then time, key and BPM in big
@@ -492,7 +492,7 @@ impl Gui {
     fn deck_screen(&mut self, ui: &mut Ui, i: usize, r: Rect, platter_left: bool) {
         let col = deck_color(i);
         ui.painter().rect_filled(r, 5.0, Color32::from_rgb(0x07, 0x09, 0x0c));
-        ui.painter().rect_stroke(r, 5.0, Stroke::new(1.0_f32, LINE), StrokeKind::Inside);
+        ui.painter().rect_stroke(r, 5.0, Stroke::new(1.0_f32, LINE()), StrokeKind::Inside);
         self.select_glow(ui, i, r);
         let jd = (r.height() - 12.0).min(r.width() * 0.3).max(40.0);
         let jr = if platter_left { Rect::from_min_size(pos2(r.left() + 6.0, r.center().y - jd / 2.0), vec2(jd, jd)) }
@@ -504,7 +504,7 @@ impl Gui {
         self.reg(format!("lock{i}"), lr);
         if resp.clicked() { let d = &mut self.app.decks[i]; d.locked = !d.locked; let on = d.locked; self.app.say(&format!("Deck {} {}", i + 1, if on { "locked: nothing loads onto it" } else { "unlocked" }), 3.0); }
         let locked = self.app.decks[i].locked;
-        paint_lock(ui.painter(), lr, locked, if locked { col } else if resp.hovered() { FG } else { DIM });
+        paint_lock(ui.painter(), lr, locked, if locked { col } else if resp.hovered() { FG() } else { DIM() });
         resp.on_hover_text(if locked { "Load lock on: click to unlock" } else { "Load lock: stop anything loading onto this deck" });
         let text = if platter_left { Rect::from_min_max(pos2(jr.right() + 10.0, r.top() + 6.0), pos2(r.right() - 10.0, r.bottom() - 6.0)) }
             else { Rect::from_min_max(pos2(r.left() + 10.0, r.top() + 6.0), pos2(jr.left() - 10.0, r.bottom() - 6.0)) };
@@ -514,7 +514,7 @@ impl Gui {
         let t = d.now();
         let big = (text.height() * 0.3).min(text.width() * 0.4 / 5.0).clamp(14.0, 30.0);
         let small = (big * 0.45).clamp(9.5, 12.0);
-        let lab = |x: f32, y: f32, s: &str, a: egui::Align2| { p.text(pos2(x, y), a, s, bold(small - 1.0), DIM); };
+        let lab = |x: f32, y: f32, s: &str, a: egui::Align2| { p.text(pos2(x, y), a, s, bold(small - 1.0), DIM()); };
         // three columns: TIME | KEY | BPM
         let cw = text.width() * 0.2;
         let (c0, c1, c2) = (text.left(), text.left() + text.width() * 0.4, text.right());
@@ -523,23 +523,23 @@ impl Gui {
         lab(c0, y_lab, "REMAIN", egui::Align2::LEFT_TOP);
         lab(c1 + cw / 2.0, y_lab, "KEY", egui::Align2::CENTER_TOP);
         lab(c2, y_lab, "BPM", egui::Align2::RIGHT_TOP);
-        let fg = if loaded { FG } else { DIM };
+        let fg = if loaded { FG() } else { DIM() };
         let remain = if loaded { format!("-{}", fmt_time(d.duration - t)) } else { "-:--.-".into() };
         let near_end = loaded && d.duration - t < 30.0;
         p.text(pos2(c0, y_big), egui::Align2::LEFT_TOP, remain, mono(big), if near_end { RED } else { fg });
         let key = if loaded { camelot(d.key_now()) } else { None };
         match key {
             Some(c) => { p.text(pos2(c1 + cw / 2.0, y_big), egui::Align2::CENTER_TOP, c.label(), bold(big), rgb(c.color())); }
-            None => { p.text(pos2(c1 + cw / 2.0, y_big), egui::Align2::CENTER_TOP, "--", bold(big), DIM); }
+            None => { p.text(pos2(c1 + cw / 2.0, y_big), egui::Align2::CENTER_TOP, "--", bold(big), DIM()); }
         }
         let bpm = if loaded && d.bpm() > 0.0 { format!("{:.1}", d.eff_bpm()) } else { "---.-".into() };
         p.text(pos2(c2, y_big), egui::Align2::RIGHT_TOP, bpm, mono(big), fg);
         // second line: elapsed | flags | tempo
         let y2 = y_big + big + 4.0;
-        if loaded { p.text(pos2(c0, y2), egui::Align2::LEFT_TOP, fmt_time(t), mono(small), MUTED); }
+        if loaded { p.text(pos2(c0, y2), egui::Align2::LEFT_TOP, fmt_time(t), mono(small), MUTED()); }
         let rg = d.range();
         let tempo = format!("{:+.2}% {}", (d.rate() - 1.0) * 100.0, if rg == 100.0 { "W".into() } else { format!("±{rg}") });
-        p.text(pos2(c2, y2), egui::Align2::RIGHT_TOP, tempo, mono(small), if d.pitch.abs() < 1e-6 { MUTED } else { FG });
+        p.text(pos2(c2, y2), egui::Align2::RIGHT_TOP, tempo, mono(small), if d.pitch.abs() < 1e-6 { MUTED() } else { FG() });
         let master = self.app.tempo_master() == Some(i);
         let mut flags: Vec<(String, Color32)> = [(master, "MASTER", CUE), (d.sync, "SYNC", col), (d.mt, "MT", col), (d.locked, "LOCK", col)].into_iter().filter(|f| f.0).map(|f| (f.1.to_string(), f.2)).collect();
         if let Some(t) = phase_tag(d) { flags.insert(flags.len().min(2), t); }
@@ -555,10 +555,10 @@ impl Gui {
         let mid = Rect::from_min_max(pos2(c0, y2 + small + 8.0), pos2(c2, y3 - 6.0));
         if loaded && mid.height() >= 26.0 {
             let (title, artist) = d.track.as_ref().map(|t| (t.title.clone(), t.artist.clone())).unwrap_or_default();
-            p.text(mid.left_top(), egui::Align2::LEFT_TOP, title, bold(small + 1.0), FG);
+            p.text(mid.left_top(), egui::Align2::LEFT_TOP, title, bold(small + 1.0), FG());
             let mut top = mid.top() + small + 4.0;
             if !artist.is_empty() && mid.height() >= 60.0 {
-                p.text(pos2(mid.left(), top), egui::Align2::LEFT_TOP, artist, prop(small), MUTED);
+                p.text(pos2(mid.left(), top), egui::Align2::LEFT_TOP, artist, prop(small), MUTED());
                 top += small + 4.0;
             }
             let ov = Rect::from_min_max(pos2(mid.left(), top + 2.0), pos2(mid.right(), mid.bottom().min(top + 2.0 + 56.0)));
@@ -571,11 +571,11 @@ impl Gui {
             let mut x = c0 + 4.0;
             for k in 0..4 {
                 let on = k == beat;
-                p.rect_filled(Rect::from_center_size(pos2(x + 6.0, y3 + small / 2.0), vec2(12.0, 6.0)), 1.5, if on { if k == 0 { RED } else { col } } else { LINE2 });
+                p.rect_filled(Rect::from_center_size(pos2(x + 6.0, y3 + small / 2.0), vec2(12.0, 6.0)), 1.5, if on { if k == 0 { RED } else { col } } else { LINE2() });
                 x += 16.0;
             }
             let bar = (b / 4.0).floor() as i64 + 1;
-            p.text(pos2(x + 4.0, y3 + small / 2.0), egui::Align2::LEFT_CENTER, format!("{}.{}", bar.max(0), beat + 1), mono(small), MUTED);
+            p.text(pos2(x + 4.0, y3 + small / 2.0), egui::Align2::LEFT_CENTER, format!("{}.{}", bar.max(0), beat + 1), mono(small), MUTED());
             if let Some((s, _e, bars, label, barlen)) = d.phrase_spans().into_iter().find(|ps| t >= ps.0 && t < ps.1) {
                 let n = (((t - s) / barlen).floor() as u32 + 1).min(bars);
                 p.text(pos2(c2, y3 + small / 2.0), egui::Align2::RIGHT_CENTER, format!("{} {}/{}", label.to_uppercase(), n, bars), bold(small), rgb(crate::analysis::phrase_color(&label)));
@@ -680,7 +680,7 @@ impl Gui {
         let info = match (d.lp.a, d.lp.b) { (None, _) => "—".to_string(), (Some(_), None) => "IN…".into(), _ => frac_text(d.loop_beats()) };
         let on = d.lp.on;
         let lr = button(ui, &info, size, false, LOOP, font).on_hover_text("Loop length in beats");
-        ui.painter().rect_stroke(lr.rect, 4.0, Stroke::new(1.0_f32, if on { LOOP } else { LINE2 }), StrokeKind::Inside);
+        ui.painter().rect_stroke(lr.rect, 4.0, Stroke::new(1.0_f32, if on { LOOP } else { LINE2() }), StrokeKind::Inside);
     }
     fn loop_row(&mut self, ui: &mut Ui, i: usize, r: Rect, rh: f32, font: f32) {
         let col = deck_color(i);
@@ -698,7 +698,7 @@ impl Gui {
         if button(ui, "½", vec2(u * 0.8, rh), false, LOOP, font).on_hover_text("Halve loop").clicked() { self.app.decks[i].loop_scale(0.5); }
         if button(ui, "×2", vec2(u * 0.8, rh), false, LOOP, font).on_hover_text("Double loop").clicked() { self.app.decks[i].loop_scale(2.0); }
         if button(ui, "◀4", vec2(u, rh), false, col, font).on_hover_text("Jump back 4 beats").clicked() { self.app.decks[i].beat_jump(-4.0); }
-        if button(ui, "4▶", vec2(u, rh), false, col, font).on_hover_text("Jump on 4 beats").clicked() { self.app.decks[i].beat_jump(4.0); }
+        if button(ui, "4▶", vec2(u, rh), false, col, font).on_hover_text("Jump ahead 4 beats").clicked() { self.app.decks[i].beat_jump(4.0); }
     }
     /// the pad-mode tabs and 8 pads (or the grid editor while it's open)
     fn pads(&mut self, ui: &mut Ui, i: usize, rest: Rect, rh: f32, font: f32) {
@@ -770,7 +770,7 @@ impl Gui {
         let shift = ui.input(|x| x.modifiers.shift);
         let b = self.app.decks[i].bpm();
         let c = deck_color(i);
-        let gb = |ui: &mut Ui, t: &str, tip: &str| { let w = ui.painter().layout_no_wrap(t.to_string(), prop(font), FG).size().x + 12.0; button(ui, t, vec2(w, bh), false, c, font).on_hover_text(tip).clicked() };
+        let gb = |ui: &mut Ui, t: &str, tip: &str| { let w = ui.painter().layout_no_wrap(t.to_string(), prop(font), FG()).size().x + 12.0; button(ui, t, vec2(w, bh), false, c, font).on_hover_text(tip).clicked() };
         let d = &mut self.app.decks[i];
         if gb(ui, "−.01", "BPM −0.01 (Shift: −0.1)") { d.set_bpm(b - if shift { 0.1 } else { 0.01 }, ""); }
         if gb(ui, "+.01", "BPM +0.01 (Shift: +0.1)") { d.set_bpm(b + if shift { 0.1 } else { 0.01 }, ""); }
@@ -787,7 +787,7 @@ impl Gui {
 
     // ===================================================================== mixer + BEAT FX
     fn mixer(&mut self, ui: &mut Ui, rect: Rect) {
-        ui.painter().rect_filled(rect, 5.0, PANEL);
+        ui.painter().rect_filled(rect, 5.0, PANEL());
         let frozen = self.app.learning();
         let inner = rect.shrink2(vec2(6.0, 5.0));
         let chans = mixer_order(self.app.deck_count());
@@ -804,7 +804,7 @@ impl Gui {
         for (k, &i) in chans.iter().enumerate() {
             let col = deck_color(i);
             let sr = Rect::from_min_size(pos2(strips.left() + k as f32 * (sw + GAP), strips.top()), vec2(sw, strips.height()));
-            ui.painter().rect_filled(sr, 3.0, PANEL_D);
+            ui.painter().rect_filled(sr, 3.0, PANEL_D());
             let tab_r = Rect::from_min_size(sr.min, vec2(sw, 14.0));
             // 4 decks + controller: only the decks the FLX4's two sides play are lit, with a medium strobe
             // (1.5 Hz) so you can see where the hands are; the others stay dim. 2 decks: lit when loaded.
@@ -815,7 +815,7 @@ impl Gui {
                 } else { Color32::from_rgba_unmultiplied(col.r(), col.g(), col.b(), 40) }
             } else if self.app.decks[i].loaded() { col } else { Color32::from_rgba_unmultiplied(col.r(), col.g(), col.b(), 60) };
             ui.painter().rect_filled(tab_r, 3.0, tab_c);
-            ui.painter().text(tab_r.center(), egui::Align2::CENTER_CENTER, format!("{}", i + 1), bold(11.0), BG);
+            ui.painter().text(tab_r.center(), egui::Align2::CENTER_CENTER, format!("{}", i + 1), bold(11.0), BG());
             let names: [(&str, &str); 5] = [("TRIM", "trim"), ("HI", "hi"), ("MID", "mid"), ("LOW", "low"), ("CFX", "cfx")];
             // knob and its label side by side, centred in the strip
             let kw = ks + 8.0 + 26.0;
@@ -825,10 +825,10 @@ impl Gui {
                 if *key == "trim" {
                     // TRIM with its gain in dB under it
                     let g = crate::mixer::trim_gain(self.app.mixer.trim[i] as f64);
-                    ui.painter().text(pos2(kx + 24.0, y + kh / 2.0 - 4.5), egui::Align2::RIGHT_CENTER, *label, prop(8.5), MUTED);
-                    ui.painter().text(pos2(kx + 24.0, y + kh / 2.0 + 5.0), egui::Align2::RIGHT_CENTER, db_text(g), mono(8.0), FG);
+                    ui.painter().text(pos2(kx + 24.0, y + kh / 2.0 - 4.5), egui::Align2::RIGHT_CENTER, *label, prop(8.5), MUTED());
+                    ui.painter().text(pos2(kx + 24.0, y + kh / 2.0 + 5.0), egui::Align2::RIGHT_CENTER, db_text(g), mono(8.0), FG());
                 } else {
-                    ui.painter().text(pos2(kx + 24.0, y + kh / 2.0), egui::Align2::RIGHT_CENTER, *label, prop(8.5), MUTED);
+                    ui.painter().text(pos2(kx + 24.0, y + kh / 2.0), egui::Align2::RIGHT_CENTER, *label, prop(8.5), MUTED());
                 }
                 let kr = Rect::from_min_size(pos2(kx + 26.0, y + (kh - ks - 4.0) / 2.0), vec2(ks + 8.0, ks + 4.0));
                 let ui = &mut ui.new_child(UiBuilder::new().max_rect(kr).layout(Layout::top_down(Align::Center)));
@@ -860,7 +860,7 @@ impl Gui {
         {
             let ui = &mut row_ui(ui, xr);
             let mut v = self.app.mixer.head_mix;
-            let r = knob(ui, &mut v, "", FG, 0.0, 14.0, frozen).on_hover_text("Headphones: CUE ⇄ MASTER");
+            let r = knob(ui, &mut v, "", FG(), 0.0, 14.0, frozen).on_hover_text("Headphones: CUE ⇄ MASTER");
             if !self.learn(ui, &r, "headMix", -1) && r.changed() { self.app.mixer.head_mix = v; self.app.send_mixer(); }
             let mc = self.app.mixer.master_cue;
             let r = button(ui, "MST", vec2(32.0, 18.0), mc, CUE, 9.5).on_hover_text("Master in the headphones");
@@ -874,7 +874,7 @@ impl Gui {
         }
         // ---- BEAT FX: effect ◀ ▶, beat ◀ ▶, channel, level, ON
         let fx_r = Rect::from_min_max(pos2(inner.left(), xr.bottom() + GAP), inner.max);
-        ui.painter().rect_filled(fx_r.expand(2.0), 3.0, PANEL_D);
+        ui.painter().rect_filled(fx_r.expand(2.0), 3.0, PANEL_D());
         let r1 = Rect::from_min_size(fx_r.min, vec2(fx_r.width(), rh));
         let r2 = Rect::from_min_size(pos2(fx_r.left(), r1.bottom() + GAP), vec2(fx_r.width(), rh));
         let fxc = Color32::from_rgb(0xb4, 0x7c, 0xff);
@@ -886,7 +886,7 @@ impl Gui {
             let name = self.app.fx.fx.name();
             let nw = (w - 4.0 * 18.0 - 46.0 - 5.0 * GAP).max(50.0);
             let kinds = self.app.fx.kinds();
-            let resp = ui.add_sized(vec2(nw, rh), egui::Button::new(egui::RichText::new(name).font(bold(11.0)).color(fxc)).fill(BG));
+            let resp = ui.add_sized(vec2(nw, rh), egui::Button::new(egui::RichText::new(name).font(bold(11.0)).color(fxc)).fill(BG()));
             let resp = self.reg_resp("fxSelect", resp);
             egui::Popup::menu(&resp).show(|ui| {
                 for k in kinds { if ui.selectable_label(self.app.fx.fx == k, k.name()).clicked() { self.app.fx_pick(k); } }
@@ -897,7 +897,7 @@ impl Gui {
             let r = button(ui, "◀", vec2(18.0, rh), false, fxc, 10.0).on_hover_text("Fewer beats");
             if !self.learn(ui, &r, "fxBeatDown", -1) && r.clicked() { self.app.fx_beat(-1); }
             let bt = if has_beats { frac_text(self.app.fx.beat()) } else { "—".into() };
-            ui.add_sized(vec2(46.0, rh), egui::Label::new(egui::RichText::new(bt).font(mono(11.5)).color(FG)));
+            ui.add_sized(vec2(46.0, rh), egui::Label::new(egui::RichText::new(bt).font(mono(11.5)).color(FG())));
             let r = button(ui, "▶", vec2(18.0, rh), false, fxc, 10.0).on_hover_text("More beats");
             if !self.learn(ui, &r, "fxBeatUp", -1) && r.clicked() { self.app.fx_beat(1); }
         }
@@ -907,7 +907,7 @@ impl Gui {
             let units: Vec<usize> = (0..self.app.deck_count()).chain([DECKS]).collect();
             for u in units {
                 let label = if u == DECKS { "M".to_string() } else { format!("{}", u + 1) };
-                let c = if u == DECKS { FG } else { deck_color(u) };
+                let c = if u == DECKS { FG() } else { deck_color(u) };
                 if button(ui, &label, vec2(18.0, rh), self.app.fx.ch == u, c, 10.5).on_hover_text(if u == DECKS { "BEAT FX on the master" } else { "BEAT FX on this channel" }).clicked() { self.app.fx_channel(u); }
             }
             let used = (self.app.deck_count() + 1) as f32 * (18.0 + GAP);
@@ -925,8 +925,8 @@ impl Gui {
     // ===================================================================== library
     fn library(&mut self, ui: &mut Ui) {
         let rect = ui.max_rect();
-        ui.painter().rect_filled(rect, 0.0, PANEL);
-        ui.painter().hline(rect.x_range(), rect.top(), Stroke::new(1.0_f32, LINE));
+        ui.painter().rect_filled(rect, 0.0, PANEL());
+        ui.painter().hline(rect.x_range(), rect.top(), Stroke::new(1.0_f32, LINE()));
         let tool_h = 30.0;
         let tool = Rect::from_min_size(rect.min, vec2(rect.width(), tool_h));
         let tw = self.app.store.settings.tree_w;
@@ -937,12 +937,12 @@ impl Gui {
             let ui = &mut ui.new_child(UiBuilder::new().max_rect(tool.shrink2(vec2(10.0, 4.0))).layout(Layout::left_to_right(Align::Center)));
             self.toolbar(ui);
         }
-        ui.painter().hline(rect.x_range(), tool.bottom(), Stroke::new(1.0_f32, LINE));
+        ui.painter().hline(rect.x_range(), tool.bottom(), Stroke::new(1.0_f32, LINE()));
         {
             let ui = &mut ui.new_child(UiBuilder::new().max_rect(tree).layout(Layout::top_down(Align::Min)));
             self.tree(ui);
         }
-        ui.painter().vline(tree.right(), tree.y_range(), Stroke::new(1.0_f32, LINE));
+        ui.painter().vline(tree.right(), tree.y_range(), Stroke::new(1.0_f32, LINE()));
         {
             let ui = &mut ui.new_child(UiBuilder::new().max_rect(list.shrink2(vec2(1.0, 0.0))).layout(Layout::top_down(Align::Min)));
             self.track_list(ui);
@@ -974,7 +974,7 @@ impl Gui {
                 ui.close();
             }
         }).response.on_hover_text("Add the selected tracks to a playlist");
-        if matches!(self.app.view, View::Pl(_)) && ui.button("Remove from list").on_hover_text("Remove the selected tracks from this playlist (Delete key)").clicked() { self.app.remove_from_playlist(); }
+        if matches!(self.app.view, View::Pl(_)) && ui.button("Remove from playlist").on_hover_text("Remove the selected tracks from this playlist (Delete key)").clicked() { self.app.remove_from_playlist(); }
         let r = ui.add(egui::TextEdit::singleline(&mut self.app.list.query).hint_text("Search title, artist or key (8A)").desired_width(200.0));
         self.reg("search", r.rect);
         if std::mem::take(&mut self.focus_search) { r.request_focus(); }
@@ -1014,9 +1014,9 @@ impl Gui {
             .on_hover_text("Unmount the stick so it's safe to pull out; Cratebox carries on from the local copy");
         self.reg("eject", r.rect);
         if r.clicked() { if let Some((id, _)) = stick { self.app.eject_device(&id); } }
-        ui.label(egui::RichText::new(&self.app.progress).size(12.0).color(MUTED));
+        ui.label(egui::RichText::new(&self.app.progress).size(12.0).color(MUTED()));
         ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-            ui.add(egui::Label::new(egui::RichText::new("Browse knob scrolls · press it for playlists · drag rows onto a deck or a playlist").size(10.0).color(DIM)).truncate());
+            ui.add(egui::Label::new(egui::RichText::new("Browse knob scrolls · press it for playlists · drag rows onto a deck or a playlist").size(10.0).color(DIM())).truncate());
         });
     }
 
@@ -1031,7 +1031,7 @@ impl Gui {
                     ui.add_space(6.0);
                     ui.horizontal(|ui| {
                         ui.add_space(8.0);
-                        let resp = ui.label(egui::RichText::new(&r.label).size(10.0).color(MUTED));
+                        let resp = ui.label(egui::RichText::new(&r.label).size(10.0).color(MUTED()));
                         if what == "pl" {
                             // drop a playlist here to take it back to the top level
                             if let Some(p) = resp.dnd_release_payload::<DragList>() { let id = p.0.clone(); self.app.lists.move_to(&id, None); }
@@ -1094,26 +1094,26 @@ impl Gui {
                 self.rects.insert(format!("tree:{}", r.label), rect);
                 let is_view = row_is_view(r, &self.app.view);
                 let p = ui.painter();
-                if is_view { p.rect_filled(rect, 0.0, Color32::from_rgb(0x1f, 0x2f, 0x44)); }
-                else if resp.hovered() { p.rect_filled(rect, 0.0, Color32::from_rgb(0x1a, 0x1e, 0x25)); }
-                if focus && k == self.app.tree_sel { p.rect_filled(rect, 0.0, Color32::from_rgb(0x22, 0x34, 0x4a)); p.rect_filled(Rect::from_min_size(rect.min, vec2(3.0, rect.height())), 0.0, deck_color(0)); }
+                if is_view { p.rect_filled(rect, 0.0, SEL2()); }
+                else if resp.hovered() { p.rect_filled(rect, 0.0, HOVER()); }
+                if focus && k == self.app.tree_sel { p.rect_filled(rect, 0.0, SEL()); p.rect_filled(Rect::from_min_size(rect.min, vec2(3.0, rect.height())), 0.0, deck_color(0)); }
                 if scroll && k == self.app.tree_sel { ui.scroll_to_rect(rect, None); }
                 let x0 = rect.left() + 6.0 + r.depth as f32 * 12.0;
                 let folderish = matches!(r.kind, RowKind::Folder | RowKind::DevFolder | RowKind::Dev);
                 let open = folderish && self.app.lists.open.contains(&Lists::open_key(r));
                 let caret_rect = Rect::from_min_size(pos2(x0, rect.top()), vec2(14.0, rect.height()));
-                if folderish { p.text(caret_rect.center(), egui::Align2::CENTER_CENTER, if open { "▾" } else { "▸" }, prop(10.0), MUTED); }
+                if folderish { p.text(caret_rect.center(), egui::Align2::CENTER_CENTER, if open { "▾" } else { "▸" }, prop(10.0), MUTED()); }
                 let icon = match r.kind { RowKind::All => "♫", RowKind::Pl | RowKind::DevPl => "≡", RowKind::Dev => "⏏", _ => "" };
-                p.text(pos2(x0 + 20.0, rect.center().y), egui::Align2::CENTER_CENTER, icon, prop(12.0), MUTED);
+                p.text(pos2(x0 + 20.0, rect.center().y), egui::Align2::CENTER_CENTER, icon, prop(12.0), MUTED());
                 let ro = matches!(r.kind, RowKind::Dev | RowKind::DevPl | RowKind::DevFolder);
-                p.text(pos2(x0 + 30.0, rect.center().y), egui::Align2::LEFT_CENTER, &r.label, prop(13.0), if ro { Color32::from_rgb(0xc9, 0xd3, 0xe0) } else { FG });
-                if let Some(c) = r.count { p.text(pos2(rect.right() - 30.0, rect.center().y), egui::Align2::RIGHT_CENTER, c.to_string(), mono(11.0), MUTED); }
+                p.text(pos2(x0 + 30.0, rect.center().y), egui::Align2::LEFT_CENTER, &r.label, prop(13.0), if ro { Color32::from_rgb(0xc9, 0xd3, 0xe0) } else { FG() });
+                if let Some(c) = r.count { p.text(pos2(rect.right() - 30.0, rect.center().y), egui::Align2::RIGHT_CENTER, c.to_string(), mono(11.0), MUTED()); }
                 // row actions on hover: × delete / ⏏ close / ⧉ copy
                 let xr = Rect::from_min_size(pos2(rect.right() - 24.0, rect.top()), vec2(20.0, rect.height()));
                 let hovering_x = resp.hover_pos().is_some_and(|hp| xr.contains(hp));
                 if resp.hovered() || is_view {
                     let sym = match r.kind { RowKind::Pl | RowKind::Folder | RowKind::Dev => "×", RowKind::DevPl => "+", _ => "" };
-                    if !sym.is_empty() { p.text(xr.center(), egui::Align2::CENTER_CENTER, sym, prop(14.0), if hovering_x { FG } else { MUTED }); }
+                    if !sym.is_empty() { p.text(xr.center(), egui::Align2::CENTER_CENTER, sym, prop(14.0), if hovering_x { FG() } else { MUTED() }); }
                 }
                 if resp.clicked() {
                     self.app.tree_sel = k;
@@ -1161,14 +1161,14 @@ impl Gui {
         let xs: Vec<f32> = cols.iter().scan(0.0, |acc, c| { let x = *acc; *acc += c; Some(x) }).collect();
         // header
         let (hr, _) = ui.allocate_exact_size(vec2(w, 24.0), Sense::hover());
-        ui.painter().rect_filled(hr, 0.0, RAISE);
+        ui.painter().rect_filled(hr, 0.0, RAISE());
         let heads: [(&str, Option<SortKey>); 8] = [("#", None), ("TITLE", Some(SortKey::Title)), ("ARTIST", Some(SortKey::Artist)), ("PLAYLISTS", None), ("BPM", Some(SortKey::Bpm)), ("KEY", Some(SortKey::Key)), ("TIME", Some(SortKey::Time)), ("DECK", None)];
         for (k, (label, key)) in heads.iter().enumerate() {
             let r = Rect::from_min_size(pos2(hr.left() + xs[k], hr.top()), vec2(cols[k], hr.height()));
             let resp = ui.interact(r, ui.id().with(("hdr", k)), Sense::click());
             let sorted = key.is_some() && self.app.list.sort == *key;
             let txt = format!("{label}{}", if sorted { if self.app.list.dir > 0 { " ▴" } else { " ▾" } } else { "" });
-            ui.painter().text(pos2(r.left() + 8.0, r.center().y), egui::Align2::LEFT_CENTER, txt, prop(10.5), if sorted { FG } else { MUTED });
+            ui.painter().text(pos2(r.left() + 8.0, r.center().y), egui::Align2::LEFT_CENTER, txt, prop(10.5), if sorted { FG() } else { MUTED() });
             if resp.clicked() {
                 match key {
                     Some(k) => { self.app.list.dir = if self.app.list.sort == Some(*k) { -self.app.list.dir } else { 1 }; self.app.list.sort = Some(*k); }
@@ -1185,7 +1185,7 @@ impl Gui {
                     ui.label(egui::RichText::new("No music yet.").strong());
                     ui.label("Click Add music folder and pick the folder you DJ from. Cratebox reads it in place: nothing is copied.");
                     ui.label("You can also drop audio files or folders onto the window.");
-                } else { ui.label(egui::RichText::new("Nothing here").color(MUTED)); }
+                } else { ui.label(egui::RichText::new("Nothing here").color(MUTED())); }
             });
             return;
         }
@@ -1214,13 +1214,13 @@ impl Gui {
                 let p = ui.painter();
                 let sel = k == self.app.list.sel;
                 let msel = self.app.list.sel_ids.contains(&t.id);
-                if sel { p.rect_filled(rect, 0.0, Color32::from_rgb(0x24, 0x36, 0x4d)); }
-                else if msel { p.rect_filled(rect, 0.0, Color32::from_rgb(0x1d, 0x2c, 0x3e)); }
-                else if resp.hovered() { p.rect_filled(rect, 0.0, Color32::from_rgb(0x1a, 0x1e, 0x25)); }
+                if sel { p.rect_filled(rect, 0.0, SEL()); }
+                else if msel { p.rect_filled(rect, 0.0, SEL2()); }
+                else if resp.hovered() { p.rect_filled(rect, 0.0, HOVER()); }
                 p.hline(rect.x_range(), rect.bottom(), Stroke::new(1.0_f32, Color32::from_rgb(0x19, 0x1c, 0x22)));
                 let on_deck = self.app.decks.iter().position(|d| d.track.as_ref().is_some_and(|x| x.id == t.id));
                 let dim = t.missing;
-                let tc = if dim { DIM } else if let Some(d) = on_deck { deck_color(d) } else { FG };
+                let tc = if dim { DIM() } else if let Some(d) = on_deck { deck_color(d) } else { FG() };
                 let cell = |c: usize, txt: String, color: Color32, monof: bool| {
                     let r = Rect::from_min_size(pos2(rect.left() + xs[c] + 8.0, rect.top()), vec2(cols[c] - 12.0, ROW));
                     let font = if monof { mono(12.0) } else { prop(13.0) };
@@ -1228,12 +1228,12 @@ impl Gui {
                     let pp = p.with_clip_rect(r);
                     pp.galley(pos2(r.left(), r.center().y - g.size().y / 2.0), g, color);
                 };
-                cell(0, format!("{}", self.app.list.view_pos.get(k).copied().unwrap_or(k) + 1), MUTED, true);
+                cell(0, format!("{}", self.app.list.view_pos.get(k).copied().unwrap_or(k) + 1), MUTED(), true);
                 cell(1, t.title.clone(), tc, false);
-                cell(2, t.artist.clone(), if dim { DIM } else { FG }, false);
-                cell(3, self.pl_names.1.get(&t.id).cloned().unwrap_or_default(), MUTED, false);
+                cell(2, t.artist.clone(), if dim { DIM() } else { FG() }, false);
+                cell(3, self.pl_names.1.get(&t.id).cloned().unwrap_or_default(), MUTED(), false);
                 let bpm = match t.bpm { Some(b) if b > 0.0 => if b.fract().abs() > 1e-9 { format!("{b:.2}") } else { format!("{b:.0}") }, Some(_) => "?".into(), None if t.failed => "?".into(), None => "…".into() };
-                cell(4, bpm, if t.grid_manual { LOOP } else { MUTED }, true);
+                cell(4, bpm, if t.grid_manual { LOOP } else { MUTED() }, true);
                 match t.key.and_then(camelot) {
                     Some(c) => {
                         // mixes with the playing deck: same key bright, a neighbour (±1, A⇄B) softer
@@ -1245,10 +1245,10 @@ impl Gui {
                         }
                         cell(5, c.label(), rgb(c.color()), true);
                     }
-                    None => cell(5, if t.key == Some(-1) || t.failed { "?".into() } else if t.bpm.is_none() { "…".into() } else { String::new() }, MUTED, true),
+                    None => cell(5, if t.key == Some(-1) || t.failed { "?".into() } else if t.bpm.is_none() { "…".into() } else { String::new() }, MUTED(), true),
                 }
-                cell(6, t.duration.map(|d| { let s = fmt_time(d); s[..s.len() - 2].to_string() }).unwrap_or_default(), MUTED, true);
-                cell(7, on_deck.map(|d| (d + 1).to_string()).unwrap_or_default(), MUTED, true);
+                cell(6, t.duration.map(|d| { let s = fmt_time(d); s[..s.len() - 2].to_string() }).unwrap_or_default(), MUTED(), true);
+                cell(7, on_deck.map(|d| (d + 1).to_string()).unwrap_or_default(), MUTED(), true);
                 if resp.clicked() {
                     let m = ui.input(|x| x.modifiers);
                     self.app.list.click(k, m.command || m.ctrl, m.shift);
@@ -1310,6 +1310,18 @@ impl Gui {
         let max_h = (ctx.screen_rect().height() - 90.0).max(200.0);
         egui::Window::new("Settings").open(&mut open).resizable(true).default_width(480.0).collapsible(false).show(ctx, |ui| {
             egui::ScrollArea::vertical().max_height(max_h).show(ui, |ui| {
+                ui.heading("Look");
+                ui.horizontal_wrapped(|ui| {
+                    for t in THEMES.iter() {
+                        let on = theme().name == t.name;
+                        let r = ui.add(egui::Button::new(egui::RichText::new(t.name).color(if on { FG() } else { MUTED() })).selected(on).min_size(vec2(84.0, 26.0)));
+                        // the theme's four deck colours under its name
+                        let y = r.rect.bottom() - 4.0;
+                        for k in 0..4 { ui.painter().rect_filled(Rect::from_min_size(pos2(r.rect.left() + 8.0 + k as f32 * 17.0, y), vec2(15.0, 2.0)), 0.0, t.deck(k)); }
+                        if r.clicked() { set_theme(t.name); style(ui.ctx()); self.app.store.settings.theme = t.name.to_string(); self.app.store.dirty_settings = true; }
+                    }
+                });
+                ui.separator();
                 ui.heading("Library");
                 let s = &self.app.store.settings;
                 let (mut br, custom) = (s.bpm_range, crate::analysis::BPM_CUSTOM);
@@ -1335,8 +1347,8 @@ impl Gui {
                     if done { self.app.set_bpm_range(custom); }
                 }
                 let mut dv = self.app.store.settings.deck_view.clone();
-                let dv_name = |v: &str| match v { "screens" => "Screens only", "controls" => "Buttons", _ => "Auto (screens while a controller is connected)" };
-                egui::ComboBox::from_label("Decks").selected_text(dv_name(&dv)).show_ui(ui, |ui| {
+                let dv_name = |v: &str| match v { "screens" => "Screens only", "controls" => "Screens and buttons", _ => "Auto (screens while a controller is connected)" };
+                egui::ComboBox::from_label("Deck area").selected_text(dv_name(&dv)).show_ui(ui, |ui| {
                     for v in ["auto", "screens", "controls"] { ui.selectable_value(&mut dv, v.to_string(), dv_name(v)); }
                 });
                 if dv != self.app.store.settings.deck_view { self.app.store.settings.deck_view = dv; self.app.store.dirty_settings = true; }
@@ -1392,13 +1404,13 @@ impl Gui {
                     });
                     if hd != self.app.store.settings.hp_device { self.app.store.settings.hp_device = hd; self.app.store.dirty_settings = true; self.app.apply_headphones(true); }
                 }
-                ui.label(egui::RichText::new(&self.app.hp_note).size(11.5).color(MUTED));
+                ui.label(egui::RichText::new(&self.app.hp_note).size(11.5).color(MUTED()));
                 let mut buf = self.app.store.settings.buffer;
                 egui::ComboBox::from_label("Audio buffer (lower = tighter jog, higher = no dropouts)").selected_text(format!("{buf} samples ({:.1} ms)", buf as f64 / self.app.audio.sr * 1000.0)).show_ui(ui, |ui| {
                     for b in [128u32, 256, 512, 1024, 2048] { ui.selectable_value(&mut buf, b, format!("{b} samples ({:.1} ms)", b as f64 / self.app.audio.sr * 1000.0)); }
                 });
                 if buf != self.app.store.settings.buffer { self.app.store.settings.buffer = buf; self.app.store.dirty_settings = true; let d = self.app.audio.device.clone(); self.app.set_output(&d); }
-                ui.label(egui::RichText::new(format!("{} Hz, {} channels", self.app.audio.sr, self.app.audio.channels)).size(11.0).color(DIM));
+                ui.label(egui::RichText::new(format!("{} Hz, {} channels", self.app.audio.sr, self.app.audio.channels)).size(11.0).color(DIM()));
                 ui.horizontal(|ui| {
                     ui.label("Recordings go to:");
                     let r = ui.add(egui::TextEdit::singleline(&mut self.app.store.settings.rec_dir).hint_text(crate::recorder::default_dir().display().to_string()).desired_width(260.0));
@@ -1422,19 +1434,19 @@ impl Gui {
                 if prof != self.app.midi.profile { self.app.pick_profile(&prof); }
                 let info = self.app.midi.profile_info();
                 let n = self.app.midi.learned.len();
-                ui.label(egui::RichText::new(format!("{}{}", midi::src_note(info.src), if n > 0 { format!(" You've mapped {n} control{} yourself.", if n == 1 { "" } else { "s" }) } else { String::new() })).size(11.5).color(MUTED));
+                ui.label(egui::RichText::new(format!("{}{}", midi::src_note(info.src), if n > 0 { format!(" You've mapped {n} control{} yourself.", if n == 1 { "" } else { "s" }) } else { String::new() })).size(11.5).color(MUTED()));
                 ui.horizontal(|ui| {
-                    if ui.button("Learn…").clicked() { self.app.start_learn(); }
-                    if ui.button("Clear learned").clicked() { self.app.clear_learned(); }
-                    if ui.button("Export").clicked() { self.app.ui.dialog = Some(FileDialog::new(Purpose::ExportMapping, None)); }
-                    if ui.button("Import").clicked() { self.app.ui.dialog = Some(FileDialog::new(Purpose::ImportMapping, None)); }
+                    if ui.button("MIDI learn…").clicked() { self.app.start_learn(); }
+                    if ui.button("Forget learned controls").clicked() { self.app.clear_learned(); }
+                    if ui.button("Export mapping…").clicked() { self.app.ui.dialog = Some(FileDialog::new(Purpose::ExportMapping, None)); }
+                    if ui.button("Import mapping…").clicked() { self.app.ui.dialog = Some(FileDialog::new(Purpose::ImportMapping, None)); }
                 });
                 ui.horizontal(|ui| {
                     if ui.button("Set up layer buttons…").on_hover_text("Pick the two buttons that switch the controller's sides between decks 1⇄3 and 2⇄4 (FLX4: SMART CFX and SMART FADER)").clicked() {
                         self.app.midi.setup_layer_buttons();
                         self.app.ui.settings_open = false;
                     }
-                    ui.label(egui::RichText::new("4-deck mode: which buttons switch sides").size(11.0).color(DIM));
+                    ui.label(egui::RichText::new("4-deck mode: which buttons switch sides").size(11.0).color(DIM()));
                 });
 
                 ui.separator();
@@ -1444,7 +1456,7 @@ impl Gui {
                     if ui.button("Import XML…").clicked() { self.app.ui.dialog = Some(FileDialog::new(Purpose::ImportXml, None)); }
                     if ui.button("Export XML…").clicked() { self.app.ui.dialog = Some(FileDialog::new(Purpose::ExportXml, None)); }
                 });
-                ui.label(egui::RichText::new("Tracks that are also on a plugged-in rekordbox stick play on rekordbox's grid.").size(11.0).color(MUTED));
+                ui.label(egui::RichText::new("Tracks that are also on a plugged-in rekordbox stick play on rekordbox's grid.").size(11.0).color(MUTED()));
                 if ui.button("Compare Cratebox's grids with the stick").on_hover_text("Checks where Cratebox puts bar 1 against rekordbox, for tracks on both (writes grid-compare.log)").clicked() { self.app.compare_grids(); }
                 ui.horizontal(|ui| {
                     ui.label("Export paths as if the music folders were in:");
@@ -1452,7 +1464,7 @@ impl Gui {
                     if r.changed() { self.app.store.dirty_settings = true; }
                 }).response.on_hover_text("For moving the XML to another computer, e.g. C:\\Users\\you\\Music");
                 ui.separator();
-                ui.label(egui::RichText::new(format!("Library data: {}", crate::store::data_dir().display())).size(11.0).color(DIM));
+                ui.label(egui::RichText::new(format!("Library data: {}", crate::store::data_dir().display())).size(11.0).color(DIM()));
             });
         });
         self.app.ui.settings_open = open && self.app.ui.settings_open;
@@ -1468,7 +1480,7 @@ impl Gui {
                     let picked = self.app.ui.learn_pick.as_ref().is_some_and(|(x, y)| x == a && *y == d);
                     if ui.selectable_label(picked, label).clicked() { self.app.learn_pick(a, d); }
                 }
-                ui.label(egui::RichText::new("Library:").color(MUTED));
+                ui.label(egui::RichText::new("Library:").color(MUTED()));
             });
         });
     }
@@ -1586,16 +1598,16 @@ impl Gui {
         let pc = self.battery.1.map(|b| b.0).unwrap_or(level);
         egui::Window::new("battery").title_bar(false).resizable(false).collapsible(false).order(egui::Order::Foreground)
             .anchor(egui::Align2::CENTER_CENTER, vec2(0.0, 0.0)).fixed_size(vec2(420.0, 0.0))
-            .frame(egui::Frame::window(&ctx.style()).fill(PANEL).stroke(Stroke::new(2.0_f32, RED)))
+            .frame(egui::Frame::window(&ctx.style()).fill(PANEL()).stroke(Stroke::new(2.0_f32, RED)))
             .show(ctx, |ui| {
                 ui.spacing_mut().item_spacing = vec2(8.0, 8.0);
                 if level > 3 {
                     ui.label(egui::RichText::new(format!("Battery low: {pc}%")).font(bold(18.0)).color(RED));
-                    ui.label(egui::RichText::new("Plug in now. At 3% Cratebox stops the music and ejects the USB stick so it can't be damaged.").size(13.0).color(FG));
-                    if button(ui, "OK", vec2(ui.available_width(), 32.0), false, FG, 13.0).clicked() { self.bat_dialog = None; }
+                    ui.label(egui::RichText::new("Plug in now. At 3% Cratebox stops the music and ejects the USB stick so it can't be damaged.").size(13.0).color(FG()));
+                    if button(ui, "OK", vec2(ui.available_width(), 32.0), false, FG(), 13.0).clicked() { self.bat_dialog = None; }
                 } else {
                     ui.label(egui::RichText::new(format!("Battery critical: {pc}%")).font(bold(18.0)).color(RED));
-                    ui.label(egui::RichText::new("Playback stopped and the USB stick was ejected so it can't be damaged if the laptop dies.").size(13.0).color(FG));
+                    ui.label(egui::RichText::new("Playback stopped and the USB stick was ejected so it can't be damaged if the laptop dies.").size(13.0).color(FG()));
                     let half = vec2((ui.available_width() - 8.0) / 2.0, 34.0);
                     ui.horizontal(|ui| {
                         if button(ui, "I've plugged in", half, false, deck_color(0), 13.0).clicked() {
@@ -1632,8 +1644,8 @@ impl Gui {
             egui::Grid::new("keys").num_columns(2).spacing(vec2(18.0, 3.0)).striped(true).show(ui, |ui| {
                 for (k, what) in SHORTCUTS {
                     if k.is_empty() { ui.label(egui::RichText::new(*what).font(bold(12.0)).color(LOOP)); ui.label(""); ui.end_row(); continue; }
-                    ui.label(egui::RichText::new(*k).font(mono(11.5)).color(FG));
-                    ui.label(egui::RichText::new(*what).size(11.5).color(MUTED));
+                    ui.label(egui::RichText::new(*k).font(mono(11.5)).color(FG()));
+                    ui.label(egui::RichText::new(*what).size(11.5).color(MUTED()));
                     ui.end_row();
                 }
             });
@@ -1703,17 +1715,17 @@ impl Gui {
         let start = sel.saturating_sub(rows / 2).min(view.len().saturating_sub(rows));
         egui::Window::new("wave_browser").title_bar(false).resizable(false).collapsible(false)
             .anchor(egui::Align2::CENTER_CENTER, vec2(0.0, 0.0)).fixed_size(vec2(560.0, 0.0))
-            .frame(egui::Frame::window(&ctx.style()).fill(PANEL))
+            .frame(egui::Frame::window(&ctx.style()).fill(PANEL()))
             .show(ctx, |ui| {
-                ui.label(egui::RichText::new(format!("LOAD · {}", self.app.lists.view_name(&self.app.view))).strong().color(FG));
+                ui.label(egui::RichText::new(format!("LOAD · {}", self.app.lists.view_name(&self.app.view))).strong().color(FG()));
                 ui.add_space(4.0);
-                if view.is_empty() { ui.label(egui::RichText::new("Nothing in this view").color(MUTED)); }
+                if view.is_empty() { ui.label(egui::RichText::new("Nothing in this view").color(MUTED())); }
                 for (k, t) in view.iter().enumerate().skip(start).take(rows) {
                     let on = k == sel;
                     let (r, _) = ui.allocate_exact_size(vec2(ui.available_width(), 22.0), Sense::hover());
                     let p = ui.painter();
-                    if on { p.rect_filled(r, 3.0, Color32::from_rgb(0x22, 0x34, 0x4a)); p.rect_filled(Rect::from_min_size(r.min, vec2(3.0, r.height())), 0.0, deck_color(0)); }
-                    let c = if on { FG } else { MUTED };
+                    if on { p.rect_filled(r, 3.0, SEL()); p.rect_filled(Rect::from_min_size(r.min, vec2(3.0, r.height())), 0.0, deck_color(0)); }
+                    let c = if on { FG() } else { MUTED() };
                     let name = if t.artist.is_empty() { t.title.clone() } else { format!("{} – {}", t.title, t.artist) };
                     p.with_clip_rect(Rect::from_min_max(r.min, pos2(r.right() - 110.0, r.bottom())))
                         .text(pos2(r.left() + 10.0, r.center().y), egui::Align2::LEFT_CENTER, name, prop(13.0), c);
@@ -1723,7 +1735,7 @@ impl Gui {
                     p.text(pos2(r.right() - 6.0, r.center().y), egui::Align2::RIGHT_CENTER, key, mono(12.0), c);
                 }
                 ui.add_space(4.0);
-                ui.label(egui::RichText::new(format!("{} load on that deck · Enter loads · Esc closes", (1..=self.app.deck_count()).map(|d| d.to_string()).collect::<Vec<_>>().join(" "))).size(11.0).color(MUTED));
+                ui.label(egui::RichText::new(format!("{} load on that deck · Enter loads · Esc closes", (1..=self.app.deck_count()).map(|d| d.to_string()).collect::<Vec<_>>().join(" "))).size(11.0).color(MUTED()));
             });
     }
 
@@ -1737,7 +1749,7 @@ impl Gui {
             if playing { ui.label(egui::RichText::new("A deck is playing.").size(11.0).color(CUE)); }
             let w = vec2(ui.available_width(), 28.0);
             if let Some(what) = self.power_confirm {
-                ui.label(egui::RichText::new(format!("{what} now?")).size(13.0).color(FG));
+                ui.label(egui::RichText::new(format!("{what} now?")).size(13.0).color(FG()));
                 ui.horizontal(|ui| {
                     let half = vec2((w.x - 6.0) / 2.0, 28.0);
                     if button(ui, what, half, true, RED, 12.0).clicked() {
@@ -1745,14 +1757,14 @@ impl Gui {
                         self.app.power_off(if what == "Shut down" { "poweroff" } else { "reboot" });
                         self.power_open = false;
                     }
-                    if button(ui, "Cancel", half, false, FG, 12.0).clicked() { self.power_confirm = None; }
+                    if button(ui, "Cancel", half, false, FG(), 12.0).clicked() { self.power_confirm = None; }
                 });
                 return;
             }
-            if button(ui, "Exit to login screen", w, false, FG, 12.0).on_hover_text("Quit Cratebox (same as Alt+F4)").clicked() {
+            if button(ui, "Exit to login screen", w, false, FG(), 12.0).on_hover_text("Quit Cratebox (same as Alt+F4)").clicked() {
                 ctx.send_viewport_cmd(egui::ViewportCommand::Close);
             }
-            if button(ui, "Restart", w, false, FG, 12.0).clicked() { self.power_confirm = Some("Restart"); }
+            if button(ui, "Restart", w, false, FG(), 12.0).clicked() { self.power_confirm = Some("Restart"); }
             if button(ui, "Shut down", w, false, RED, 12.0).clicked() { self.power_confirm = Some("Shut down"); }
         });
         if !open { self.power_open = false; }
@@ -1770,10 +1782,10 @@ impl Gui {
             let running = v.phase != crate::heat::Phase::Idle;
             ui.horizontal(|ui| {
                 ui.label(egui::RichText::new("TrueCurve").font(bold(14.0)));
-                ui.label(egui::RichText::new("heat curves for Peak Pro / Proxy").size(11.0).color(MUTED));
+                ui.label(egui::RichText::new("heat curves for Peak Pro / Proxy").size(11.0).color(MUTED()));
             });
             ui.horizontal(|ui| {
-                ui.add(egui::Label::new(egui::RichText::new(&v.dev_text).size(11.5).color(MUTED)).truncate());
+                ui.add(egui::Label::new(egui::RichText::new(&v.dev_text).size(11.5).color(MUTED())).truncate());
                 ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                     if v.connected {
                         if ui.button("Disconnect").clicked() { self.app.heat.disconnect(); }
@@ -1788,7 +1800,7 @@ impl Gui {
             if !v.connected {
                 for f in &v.found { if ui.add_sized(vec2(ui.available_width(), 24.0), egui::Button::new(format!("🔥 {}", f.name))).clicked() { self.app.heat.pick(f); } }
                 if v.found.is_empty() && !v.others.is_empty() && !v.scanning {
-                    ui.label(egui::RichText::new("Other devices nearby").size(11.0).color(MUTED));
+                    ui.label(egui::RichText::new("Other devices nearby").size(11.0).color(MUTED()));
                     egui::ScrollArea::vertical().id_salt("heat_others").max_height(110.0).show(ui, |ui| {
                         for f in &v.others { if ui.add_sized(vec2(ui.available_width(), 22.0), egui::Button::new(&f.name)).clicked() { self.app.heat.pick(f); } }
                     });
@@ -1798,11 +1810,11 @@ impl Gui {
             let (presets, own) = self.app.heat_names();
             let mut name = self.app.store.settings.heat_last.clone();
             ui.horizontal(|ui| {
-                ui.label(egui::RichText::new("Curve").size(12.0).color(MUTED));
+                ui.label(egui::RichText::new("Curve").size(12.0).color(MUTED()));
                 ui.add_enabled_ui(!running, |ui| {
                     egui::ComboBox::from_id_salt("heat_curve").width(240.0).selected_text(&name).show_ui(ui, |ui| {
                         for n in &presets { ui.selectable_value(&mut name, n.clone(), n); }
-                        if !own.is_empty() { ui.separator(); ui.label(egui::RichText::new("From TrueCurve").size(10.5).color(MUTED)); }
+                        if !own.is_empty() { ui.separator(); ui.label(egui::RichText::new("From TrueCurve").size(10.5).color(MUTED())); }
                         for n in &own { ui.selectable_value(&mut name, n.clone(), n); }
                     });
                 });
@@ -1810,7 +1822,7 @@ impl Gui {
             if name != self.app.store.settings.heat_last { self.app.store.settings.heat_last = name; self.app.store.dirty_settings = true; }
             let curve_on = running && v.phase != crate::heat::Phase::Hold;
             let can = v.connected && v.phase != crate::heat::Phase::Prep && v.phase != crate::heat::Phase::Hold;
-            let r = ui.add_enabled(can, egui::Button::new(egui::RichText::new(if curve_on { "Stop" } else { "Start curve" }).font(bold(13.0)).color(BG))
+            let r = ui.add_enabled(can, egui::Button::new(egui::RichText::new(if curve_on { "Stop" } else { "Start curve" }).font(bold(13.0)).color(BG()))
                 .fill(if curve_on { RED } else { CUE }).min_size(vec2(ui.available_width(), 30.0)));
             self.reg("heat.start", r.rect);
             if r.clicked() { self.app.heat_toggle(); if !curve_on { close = true; } }
@@ -1824,7 +1836,7 @@ impl Gui {
                         self.app.store.settings.heat_hold_f = (hf / 5.0).round() * 5.0; self.app.store.dirty_settings = true;
                     }
                     let mut pf = self.app.store.settings.heat_puff_full;
-                    ui.label(egui::RichText::new("full warble at").size(12.0).color(MUTED));
+                    ui.label(egui::RichText::new("full warble at").size(12.0).color(MUTED()));
                     egui::ComboBox::from_id_salt("heat_full").width(90.0).selected_text(if pf == 0.0 { "Auto".to_string() } else { format!("{pf:.0}°F drop") }).show_ui(ui, |ui| {
                         ui.selectable_value(&mut pf, 0.0, "Auto");
                         for d in [4.0, 8.0, 15.0, 25.0, 40.0] { ui.selectable_value(&mut pf, d, format!("{d:.0}°F drop")); }
@@ -1834,15 +1846,15 @@ impl Gui {
             });
             let holding = v.phase == crate::heat::Phase::Hold;
             let can = v.connected && v.phase != crate::heat::Phase::Prep && (!running || holding);
-            let r = ui.add_enabled(can, egui::Button::new(egui::RichText::new(if holding { "Stop HOLD" } else { "HOLD for PUFF" }).font(bold(13.0)).color(BG))
+            let r = ui.add_enabled(can, egui::Button::new(egui::RichText::new(if holding { "Stop HOLD" } else { "HOLD for PUFF" }).font(bold(13.0)).color(BG()))
                 .fill(if holding { RED } else { LOOP }).min_size(vec2(ui.available_width(), 30.0)));
             self.reg("heat.hold", r.rect);
             if r.clicked() { self.app.heat_hold(); if !holding && !v.is_sim { close = true; } }
             if holding {
                 let (rect, _) = ui.allocate_exact_size(vec2(ui.available_width(), 8.0), Sense::hover());
-                ui.painter().rect_filled(rect, 3.0, RAISE);
+                ui.painter().rect_filled(rect, 3.0, RAISE());
                 ui.painter().rect_filled(Rect::from_min_size(rect.min, vec2(rect.width() * v.puff as f32, rect.height())), 3.0, RED);
-                if !v.puff_info.is_empty() { ui.label(egui::RichText::new(&v.puff_info).font(mono(10.5)).color(MUTED)); }
+                if !v.puff_info.is_empty() { ui.label(egui::RichText::new(&v.puff_info).font(mono(10.5)).color(MUTED())); }
                 if v.is_sim {
                     // press and hold: a pretend draw
                     let r = button(ui, if self.hitting { "Hitting…" } else { "Hold to hit (simulator)" }, vec2(ui.available_width(), 32.0), self.hitting, RED, 12.5);
@@ -1850,7 +1862,7 @@ impl Gui {
                     if down != self.hitting { self.hitting = down; self.app.heat.hit(if down { 1.0 } else { 0.0 }); }
                 }
             }
-            ui.label(egui::RichText::new("Beat FX → PUFF (on offer while a Puffco or the simulator is connected). It plays like a theremin: a harder hit drops the bowl temperature further, and the voice glides higher (up to two octaves) and louder over a tape warble. LEVEL caps it.").size(10.5).color(MUTED));
+            ui.label(egui::RichText::new("Beat FX → PUFF (on offer while a Puffco or the simulator is connected). It plays like a theremin: a harder hit drops the bowl temperature further, and the voice glides higher (up to two octaves) and louder over a tape warble. LEVEL caps it.").size(10.5).color(MUTED()));
             if !v.msg.is_empty() { ui.label(egui::RichText::new(&v.msg).size(12.0)); }
             // ---- GLOW: the lantern as a slow rainbow that breathes with the music
             ui.separator();
@@ -1861,7 +1873,7 @@ impl Gui {
                 }
                 let k = self.app.store.settings.heat_glow_knob.clone();
                 let name = |k: &str| match k { "speed" => "speed", "sensitivity" => "sensitivity", "off" => "nothing", _ => "brightness" };
-                ui.label(egui::RichText::new("FX knob sets").size(11.5).color(MUTED));
+                ui.label(egui::RichText::new("FX knob sets").size(11.5).color(MUTED()));
                 let mut nk = k.clone();
                 egui::ComboBox::from_id_salt("glow_knob").width(96.0).selected_text(name(&k)).show_ui(ui, |ui| {
                     for x in ["intensity", "speed", "sensitivity", "off"] { ui.selectable_value(&mut nk, x.to_string(), name(x)); }
@@ -1875,14 +1887,14 @@ impl Gui {
             });
             // ---- curves from TrueCurve
             ui.separator();
-            ui.label(egui::RichText::new("Curves from TrueCurve: press \"Copy curves for Cratebox\" there, paste here").size(11.0).color(MUTED));
+            ui.label(egui::RichText::new("Curves from TrueCurve: press \"Copy curves for Cratebox\" there, paste here").size(11.0).color(MUTED()));
             ui.add(egui::TextEdit::multiline(&mut self.heat_paste).desired_rows(2).desired_width(f32::INFINITY).font(mono(10.5)).hint_text("{\"My curve\": {\"points\": [...]}}"));
             if ui.add_enabled(!self.heat_paste.trim().is_empty(), egui::Button::new("Add curves")).clicked() {
                 let m = self.app.heat_paste(&self.heat_paste.clone());
                 if m.starts_with("Added") { self.heat_paste.clear(); }
                 self.app.say(&m, 5.0);
             }
-            ui.label(egui::RichText::new("Uses profile slot 4 while it runs and puts it back after; stops at 600°F. Close this and keep mixing: the HEAT button shows the bowl temperature.").size(10.5).color(DIM));
+            ui.label(egui::RichText::new("Uses profile slot 4 while it runs and puts it back after; stops at 600°F. Close this and keep mixing: the HEAT button shows the bowl temperature.").size(10.5).color(DIM()));
             });
         });
         if close { open = false; }
@@ -2037,7 +2049,7 @@ pub const SHORTCUTS: &[(&str, &str)] = &[
     ("D   L", "Loop ½"),
     ("F   ;", "Loop ×2"),
     ("C   .", "Beat jump back 4"),
-    ("V   /", "Beat jump on 4"),
+    ("V   /", "Beat jump ahead 4"),
     ("⌘⇧X   ⌘⇧.", "Bar 1 at the playhead, left / right deck (Ctrl+Shift works too)"),
     ("1 2 3 4  Q W E R", "Left deck pads 1-8 (Shift: delete hot cue)"),
     ("7 8 9 0  U I O P", "Right deck pads 1-8 (Shift: delete hot cue)"),
@@ -2055,7 +2067,7 @@ pub const SHORTCUTS: &[(&str, &str)] = &[
     ("Delete", "Remove from this playlist"),
     ("", "Screen"),
     ("F1", "WAVE (just the waveforms)"),
-    ("F2", "4 DECKS"),
+    ("F2", "DECKS: 2 → 3 → 4"),
     ("F3", "BROWSE (big library)"),
     ("F4", "HEAT panel"),
     ("Ctrl R", "REC on / off"),
@@ -2070,13 +2082,13 @@ pub const SHORTCUTS: &[(&str, &str)] = &[
 ];
 
 fn pill(ui: &mut Ui, text: &str, on: bool) -> Response {
-    let g = ui.painter().layout_no_wrap(text.to_string(), prop(11.0), FG);
+    let g = ui.painter().layout_no_wrap(text.to_string(), prop(11.0), FG());
     let (rect, r) = ui.allocate_exact_size(vec2(g.size().x + 26.0, 20.0), Sense::hover());
     let p = ui.painter();
-    p.rect_filled(rect, 10.0, RAISE);
-    p.rect_stroke(rect, 10.0, Stroke::new(1.0_f32, LINE2), StrokeKind::Inside);
-    p.circle_filled(pos2(rect.left() + 11.0, rect.center().y), 3.5, if on { GREEN } else { DIM });
-    p.galley(pos2(rect.left() + 19.0, rect.center().y - g.size().y / 2.0), g, FG);
+    p.rect_filled(rect, 10.0, RAISE());
+    p.rect_stroke(rect, 10.0, Stroke::new(1.0_f32, LINE2()), StrokeKind::Inside);
+    p.circle_filled(pos2(rect.left() + 11.0, rect.center().y), 3.5, if on { GREEN } else { DIM() });
+    p.galley(pos2(rect.left() + 19.0, rect.center().y - g.size().y / 2.0), g, FG());
     r
 }
 fn short_dev(n: &str) -> String {
@@ -2087,9 +2099,9 @@ fn short_dev(n: &str) -> String {
 fn pad(ui: &mut Ui, text: &str, size: egui::Vec2, lit: bool, accent: Color32, font: f32) -> Response {
     let (rect, r) = ui.allocate_exact_size(size, Sense::click());
     let p = ui.painter();
-    p.rect_filled(rect, 4.0, if lit { Color32::from_rgba_unmultiplied(accent.r(), accent.g(), accent.b(), 46) } else if r.hovered() { Color32::from_rgb(0x23, 0x28, 0x31) } else { RAISE });
-    p.rect_stroke(rect, 4.0, Stroke::new(1.0_f32, if lit { accent } else { LINE2 }), StrokeKind::Inside);
-    p.with_clip_rect(rect).text(rect.center(), egui::Align2::CENTER_CENTER, text, prop(font), if lit { accent } else { FG });
+    p.rect_filled(rect, 4.0, if lit { Color32::from_rgba_unmultiplied(accent.r(), accent.g(), accent.b(), 46) } else if r.hovered() { Color32::from_rgb(0x23, 0x28, 0x31) } else { RAISE() });
+    p.rect_stroke(rect, 4.0, Stroke::new(1.0_f32, if lit { accent } else { LINE2() }), StrokeKind::Inside);
+    p.with_clip_rect(rect).text(rect.center(), egui::Align2::CENTER_CENTER, text, prop(font), if lit { accent } else { FG() });
     r
 }
 /// an effect's name short enough for a pad
@@ -2106,11 +2118,11 @@ impl eframe::App for Gui {
         self.remote_cmds();
         self.battery_watch();
         self.dropped_files(ctx);
-        egui::TopBottomPanel::top("header").exact_height(34.0).frame(egui::Frame::new().fill(PANEL).inner_margin(egui::Margin::symmetric(10, 3))).show(ctx, |ui| self.header(ui));
+        egui::TopBottomPanel::top("header").exact_height(34.0).frame(egui::Frame::new().fill(PANEL()).inner_margin(egui::Margin::symmetric(10, 3))).show(ctx, |ui| self.header(ui));
         if self.app.learning() {
             egui::TopBottomPanel::bottom("learn").exact_height(34.0).frame(egui::Frame::new().fill(Color32::from_rgb(0x2a, 0x26, 0x10)).inner_margin(egui::Margin::symmetric(10, 3))).show(ctx, |ui| self.learn_bar(ui));
         }
-        egui::CentralPanel::default().frame(egui::Frame::new().fill(BG).inner_margin(4.0)).show(ctx, |ui| {
+        egui::CentralPanel::default().frame(egui::Frame::new().fill(BG()).inner_margin(4.0)).show(ctx, |ui| {
             let full = ui.available_rect_before_wrap();
             let four = self.app.four();
             let shown: Vec<usize> = (0..DECKS).filter(|&i| self.app.deck_active(i)).collect();
