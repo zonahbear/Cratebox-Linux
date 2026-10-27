@@ -38,6 +38,9 @@ pub struct Gui {
     heat_open: bool,
     /// the OFF menu (exit to the login screen, restart, shut down) and the action waiting for its confirm
     power_open: bool,
+    /// WAVE mode: the pop-up library (opened by scrolling, last activity) and the selection it last saw
+    wave_browse: Option<std::time::Instant>,
+    last_sel: usize,
     power_confirm: Option<&'static str>,
     /// HEAT panel: the paste box, and the simulator's "hold to hit" being held
     heat_paste: String,
@@ -70,7 +73,7 @@ impl Gui {
         app.midi_io.set_wake(wake);
         app.watch_drives();
         Gui { app, deck_rects: [Rect::NOTHING; DECKS], jog_last: [None; DECKS], lane_drag: [None; DECKS], pad_held: None, frames: 0, test_shot: None,
-            rects: Default::default(), uitest: crate::uitest::UiTest::from_env(), heat_open: false, power_open: false, power_confirm: None, heat_paste: String::new(), hitting: false, focus_search: false, keys_open: false }
+            rects: Default::default(), uitest: crate::uitest::UiTest::from_env(), heat_open: false, power_open: false, power_confirm: None, wave_browse: None, last_sel: usize::MAX, heat_paste: String::new(), hitting: false, focus_search: false, keys_open: false }
     }
 
     /// in learn mode a click on a mappable control picks it; returns true if it was used up that way
@@ -703,7 +706,17 @@ impl Gui {
             let sr = Rect::from_min_size(pos2(strips.left() + k as f32 * (sw + GAP), strips.top()), vec2(sw, strips.height()));
             ui.painter().rect_filled(sr, 3.0, PANEL_D);
             let tab_r = Rect::from_min_size(sr.min, vec2(sw, 14.0));
-            ui.painter().rect_filled(tab_r, 3.0, if self.app.decks[i].loaded() { col } else { Color32::from_rgba_unmultiplied(col.r(), col.g(), col.b(), 60) });
+            // 4 decks + controller: only the decks the FLX4's two sides play are lit, with a medium strobe
+            // (2 Hz) so you can see where the hands are; the others stay dim. 2 decks: lit when loaded.
+            let tab_c = if self.app.four() && !self.app.midi_io.name.is_empty() {
+                if self.side_of(i).is_some() {
+                    let t = ui.ctx().input(|x| x.time);
+                    ui.ctx().request_repaint();
+                    let a = 0.35 + 0.65 * (0.5 + 0.5 * (t * std::f64::consts::TAU * 2.0).cos()) as f32;
+                    Color32::from_rgba_unmultiplied(col.r(), col.g(), col.b(), (a * 255.0) as u8)
+                } else { Color32::from_rgba_unmultiplied(col.r(), col.g(), col.b(), 40) }
+            } else if self.app.decks[i].loaded() { col } else { Color32::from_rgba_unmultiplied(col.r(), col.g(), col.b(), 60) };
+            ui.painter().rect_filled(tab_r, 3.0, tab_c);
             ui.painter().text(tab_r.center(), egui::Align2::CENTER_CENTER, format!("{}", i + 1), bold(11.0), BG);
             let names: [(&str, &str); 5] = [("TRIM", "trim"), ("HI", "hi"), ("MID", "mid"), ("LOW", "low"), ("CFX", "cfx")];
             // knob and its label side by side, centred in the strip
@@ -1333,6 +1346,23 @@ impl Gui {
         let (down, up) = ctx.input(|i| (i.key_pressed(Key::ArrowDown), i.key_pressed(Key::ArrowUp)));
         if down { self.app.list.move_sel(1); }
         if up { self.app.list.move_sel(-1); }
+        if (down || up) && self.wave_browse.is_some() { self.wave_browse = Some(std::time::Instant::now()); }
+        let evs: Vec<_> = if self.wave_browse.is_some() {
+            let n = if self.app.four() { 4 } else { 2 };
+            evs.into_iter().filter(|(key, pressed, m)| {
+                let d = match key { Key::Num1 => Some(0), Key::Num2 => Some(1), Key::Num3 => Some(2), Key::Num4 => Some(3), _ => None };
+                if m.any() { return true; }
+                if let Some(d) = d.filter(|d| *d < n) {
+                    if *pressed { self.app.load_selected(d); self.wave_browse = None; }
+                    return false;
+                }
+                match key {
+                    Key::Enter => { if *pressed { let d = self.load_target(); self.app.load_selected(d); self.wave_browse = None; } false }
+                    Key::Escape => { if *pressed { self.wave_browse = None; } false }
+                    _ => true,
+                }
+            }).collect()
+        } else { evs };
         for (key, pressed, m) in evs {
             if !pressed {
                 // let go: CUE preview, held PAD FX
@@ -1450,6 +1480,47 @@ impl Gui {
     /// OFF: leave the Cratebox session (back to the login screen on Cratebox OS), restart or shut down.
     /// Restart and shut down ask once more, so a stray tap can't end a set; they go through logind
     /// (systemctl), which lets the logged-in user do it without a password.
+    /// WAVE mode hides the library; scrolling (browse knob, arrow keys) pops it up over the lanes.
+    /// 1-4 load the highlighted track on that deck, Enter on the usual one, Esc closes; it goes after 6 s idle.
+    fn wave_browser(&mut self, ctx: &egui::Context) {
+        let sel = self.app.list.sel;
+        let moved = sel != self.last_sel && self.last_sel != usize::MAX;
+        self.last_sel = sel;
+        if !self.app.store.settings.wave { self.wave_browse = None; return; }
+        if moved { self.wave_browse = Some(std::time::Instant::now()); }
+        let Some(t0) = self.wave_browse else { return };
+        if t0.elapsed().as_secs_f32() > 6.0 { self.wave_browse = None; return; }
+        ctx.request_repaint_after(std::time::Duration::from_millis(250));
+        let rows = 11usize;
+        let view = &self.app.list.view;
+        let start = sel.saturating_sub(rows / 2).min(view.len().saturating_sub(rows));
+        let four = self.app.four();
+        egui::Window::new("wave_browser").title_bar(false).resizable(false).collapsible(false)
+            .anchor(egui::Align2::CENTER_CENTER, vec2(0.0, 0.0)).fixed_size(vec2(560.0, 0.0))
+            .frame(egui::Frame::window(&ctx.style()).fill(PANEL))
+            .show(ctx, |ui| {
+                ui.label(egui::RichText::new(format!("LOAD · {}", self.app.lists.view_name(&self.app.view))).strong().color(FG));
+                ui.add_space(4.0);
+                if view.is_empty() { ui.label(egui::RichText::new("Nothing in this view").color(MUTED)); }
+                for (k, t) in view.iter().enumerate().skip(start).take(rows) {
+                    let on = k == sel;
+                    let (r, _) = ui.allocate_exact_size(vec2(ui.available_width(), 22.0), Sense::hover());
+                    let p = ui.painter();
+                    if on { p.rect_filled(r, 3.0, Color32::from_rgb(0x22, 0x34, 0x4a)); p.rect_filled(Rect::from_min_size(r.min, vec2(3.0, r.height())), 0.0, deck_color(0)); }
+                    let c = if on { FG } else { MUTED };
+                    let name = if t.artist.is_empty() { t.title.clone() } else { format!("{} – {}", t.title, t.artist) };
+                    p.with_clip_rect(Rect::from_min_max(r.min, pos2(r.right() - 110.0, r.bottom())))
+                        .text(pos2(r.left() + 10.0, r.center().y), egui::Align2::LEFT_CENTER, name, prop(13.0), c);
+                    let bpm = t.bpm.map(|b| format!("{b:.1}")).unwrap_or_default();
+                    let key = t.key.and_then(camelot).map(|c| c.label()).unwrap_or_default();
+                    p.text(pos2(r.right() - 50.0, r.center().y), egui::Align2::RIGHT_CENTER, bpm, mono(12.0), c);
+                    p.text(pos2(r.right() - 6.0, r.center().y), egui::Align2::RIGHT_CENTER, key, mono(12.0), c);
+                }
+                ui.add_space(4.0);
+                ui.label(egui::RichText::new(if four { "1 2 3 4 load on that deck · Enter loads · Esc closes" } else { "1 2 load on that deck · Enter loads · Esc closes" }).size(11.0).color(MUTED));
+            });
+    }
+
     fn power_menu(&mut self, ctx: &egui::Context) {
         let anchor = self.rects.get("power").map(|r| pos2(r.right(), r.bottom() + 6.0)).unwrap_or(pos2(1100.0, 40.0));
         let mut open = true;
@@ -1676,6 +1747,7 @@ pub const SHORTCUTS: &[(&str, &str)] = &[
     ("F3", "BROWSE (big library)"),
     ("F4", "HEAT panel"),
     ("Ctrl R", "REC on / off"),
+    ("↑ ↓", "WAVE mode: pops up the library; then 1 2 3 4 load on that deck"),
     ("F11", "Full screen on/off"),
     ("F12", "This list"),
     ("Esc", "Close panels, stop MIDI learn"),
@@ -1783,6 +1855,7 @@ impl eframe::App for Gui {
         });
         if self.app.ui.settings_open { self.settings(ctx); }
         if self.power_open { self.power_menu(ctx); }
+        self.wave_browser(ctx);
         if self.heat_open { self.heat_panel(ctx); } else { self.app.heat.set_panel(false); }
         if self.keys_open { self.keys_window(ctx); }
         self.dialogs(ctx);

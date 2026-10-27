@@ -93,6 +93,8 @@ pub struct App {
     pub repaint: Option<Arc<dyn Fn() + Send + Sync>>,
     /// USB → local copy running: (bytes done, bytes to copy)
     pub copying: Option<(u64, u64)>,
+    /// when to ask the controller for its knob/fader positions again
+    midi_query: Vec<Instant>,
     pub hp_note: String,
     /// output that stopped and is being reopened: (device name, next attempt)
     reconnect: Option<(String, Instant)>,
@@ -161,7 +163,7 @@ impl App {
             jobs_tx, jobs_rx, queue: VecDeque::new(), analysing: None, analysed_count: 0, deck_loads: Arc::new(AtomicUsize::new(0)),
             midi: midi::Engine::new(), midi_io: MidiIo::new(), last_keep: Instant::now(), last_led: Instant::now(),
             status: String::new(), status_until: Instant::now(), progress: String::new(), outputs, ui: UiState::default(), last_flush: Instant::now(),
-            repaint: None, copying: None, hp_note: String::new(), reconnect: None, scanning: 0,
+            repaint: None, copying: None, midi_query: vec![], hp_note: String::new(), reconnect: None, scanning: 0,
         };
         app.midi.use_profile("learn", vec![]);
         app.midi.four = app.store.settings.four;
@@ -644,6 +646,9 @@ impl App {
         self.use_profile(&pid);
         let p = self.midi.profile_info();
         if let Some(init) = p.init { self.midi_io.send(init); }
+        // ask again in 1 s and 3 s: right after the port opens (at boot especially) the FLX4 can miss the
+        // first request, and then the on-screen knobs and faders don't match the hardware
+        self.midi_query = vec![Instant::now() + std::time::Duration::from_secs(1), Instant::now() + std::time::Duration::from_secs(3)];
         self.say(&format!("{name} connected · {}{}", p.name, if p.src == midi::Src::Tested { "" } else { " (see Settings → Controller)" }), 6.0);
     }
     pub fn use_profile(&mut self, id: &str) {
@@ -991,6 +996,10 @@ impl App {
         while self.trash_rx.try_recv().is_ok() {} // finished-with audio buffers get freed here, not on the audio thread
         if let Some(e) = self.audio.take_error() { self.say(&format!("Sound output problem: {e}"), 8.0); }
         self.watch_output();
+        if self.midi_query.first().is_some_and(|t| Instant::now() >= *t) {
+            self.midi_query.remove(0);
+            if let Some(init) = self.midi.profile_info().init { self.midi_io.send(init); }
+        }
         // HEAT: the worker's view, PUFF amounts into the BEAT FX unit, learned models and the device to remember
         self.heat.poll();
         while let Ok(e) = self.heat.events.try_recv() {
