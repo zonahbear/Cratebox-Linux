@@ -959,6 +959,14 @@ impl Gui {
                 // row actions on hover: × delete / ⏏ close / ⧉ copy
                 let xr = Rect::from_min_size(pos2(rect.right() - 24.0, rect.top()), vec2(20.0, rect.height()));
                 let hovering_x = resp.hover_pos().is_some_and(|hp| xr.contains(hp));
+                // ↓ on a stick: copy it to this computer (or update that copy)
+                let stick_row = r.kind == RowKind::Dev && self.app.lists.devices.iter().any(|d| d.id == r.dev && !crate::usbcopy::is_copy(&d.root));
+                let cr = xr.translate(vec2(-22.0, 0.0));
+                let hovering_c = stick_row && resp.hover_pos().is_some_and(|hp| cr.contains(hp));
+                if stick_row && (resp.hovered() || is_view) {
+                    p.text(cr.center(), egui::Align2::CENTER_CENTER, "↓", prop(14.0), if hovering_c { FG } else { MUTED });
+                    if hovering_c { resp.clone().on_hover_text("Copy to this computer / update the copy"); }
+                }
                 if resp.hovered() || is_view {
                     let sym = match r.kind { RowKind::Pl | RowKind::Folder | RowKind::Dev => "×", RowKind::DevPl => "+", _ => "" };
                     if !sym.is_empty() { p.text(xr.center(), egui::Align2::CENTER_CENTER, sym, prop(14.0), if hovering_x { FG } else { MUTED }); }
@@ -967,7 +975,8 @@ impl Gui {
                     self.app.tree_sel = k;
                     self.app.focus_tree = false;
                     let on_caret = resp.interact_pointer_pos().is_some_and(|hp| caret_rect.contains(hp));
-                    if hovering_x {
+                    if hovering_c { let d = r.dev.clone(); self.app.copy_device(&d); }
+                    else if hovering_x {
                         match r.kind {
                             RowKind::Pl | RowKind::Folder => self.app.ui.confirm_delete = Some(r.id.clone()),
                             RowKind::Dev => { let d = r.dev.clone(); self.app.close_device(&d); }

@@ -270,7 +270,12 @@ pub fn mount_device(root: &Path, saved: &crate::library::CacheMap, range: (f64, 
     let pdb_path = sub(root, "/PIONEER/rekordbox/export.pdb");
     let buf = std::fs::read(&pdb_path).map_err(|_| format!("\"{name}\" doesn't look like a rekordbox USB/SD export (no PIONEER/rekordbox/export.pdb). Pick the drive itself."))?;
     let db = parse_pdb(&buf).map_err(|e| format!("Couldn't read that rekordbox database: {e}"))?;
-    let id = format!("usb-{name}");
+    // a local copy ("<stick> local" in Cratebox USB) keeps the stick's id: same device, same saved edits,
+    // and mounting one replaces the other in the list, so tracks never show twice
+    let copy = crate::usbcopy::is_copy(root);
+    let stick = if copy { name.strip_suffix(" local").unwrap_or(&name).to_string() } else { name.clone() };
+    let id = format!("usb-{stick}");
+    let name = if copy { format!("{stick} (on this computer)") } else { name };
     let mut dev = Device { id: id.clone(), name: name.clone(), root: root.to_path_buf(), tree: db.playlists, by_rb: HashMap::new(), track_count: db.tracks.len() };
     let mut out = vec![];
     for r in db.tracks {

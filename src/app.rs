@@ -30,6 +30,8 @@ pub enum Job {
     Analysed { id: String, res: Result<AnaResult, String> },
     Rephrased { deck: usize, gen: u64, phrases: Vec<Phrase> },
     Mounted { root: PathBuf, res: Result<(Device, Vec<Track>), String>, remember: bool },
+    CopyProgress { done: u64, total: u64 },
+    Copied { stick: PathBuf, copy: PathBuf, res: Result<crate::usbcopy::Copied, String> },
 }
 
 pub struct AnaResult { pub bpm: f64, pub first_beat: f64, pub key: i32, pub phrases: Vec<Phrase>, pub duration: f64, pub title: Option<String>, pub artist: Option<String> }
@@ -87,6 +89,8 @@ pub struct App {
     pub ui: UiState,
     last_flush: Instant,
     pub repaint: Option<Arc<dyn Fn() + Send + Sync>>,
+    /// USB → local copy running: (bytes done, bytes to copy)
+    pub copying: Option<(u64, u64)>,
     pub hp_note: String,
     /// output that stopped and is being reopened: (device name, next attempt)
     reconnect: Option<(String, Instant)>,
@@ -155,7 +159,7 @@ impl App {
             jobs_tx, jobs_rx, queue: VecDeque::new(), analysing: None, analysed_count: 0, deck_loads: Arc::new(AtomicUsize::new(0)),
             midi: midi::Engine::new(), midi_io: MidiIo::new(), last_keep: Instant::now(), last_led: Instant::now(),
             status: String::new(), status_until: Instant::now(), progress: String::new(), outputs, ui: UiState::default(), last_flush: Instant::now(),
-            repaint: None, hp_note: String::new(), reconnect: None, scanning: 0,
+            repaint: None, copying: None, hp_note: String::new(), reconnect: None, scanning: 0,
         };
         app.midi.use_profile("learn", vec![]);
         app.midi.four = app.store.settings.four;
@@ -379,6 +383,26 @@ impl App {
         std::thread::spawn(move || {
             let res = playlists::mount_device(&root, &saved, range);
             let _ = tx.send(Job::Mounted { root, res, remember });
+            if let Some(w) = wake { w(); }
+        });
+    }
+    /// copy a mounted stick to ~/Music/Cratebox USB, or bring that copy up to date; the copy then
+    /// replaces the stick in the list (same device id) and is remembered instead of it
+    pub fn copy_device(&mut self, id: &str) {
+        if self.copying.is_some() { self.say("A copy is already running", 3.0); return; }
+        let Some(d) = self.lists.devices.iter().find(|x| x.id == id) else { return };
+        if crate::usbcopy::is_copy(&d.root) { self.say("This is the copy on this computer: plug the stick in and open it to update", 6.0); return; }
+        let stick = d.root.clone();
+        let copy = crate::usbcopy::copy_root(&stick.file_name().map(|s| s.to_string_lossy().to_string()).unwrap_or_default());
+        self.copying = Some((0, 0));
+        let tx = self.jobs_tx.clone();
+        let wake = self.repaint.clone();
+        std::thread::spawn(move || {
+            let mut last = std::time::Instant::now();
+            let res = crate::usbcopy::copy_tree(&stick, &copy, |done, total| {
+                if last.elapsed().as_millis() >= 250 { last = std::time::Instant::now(); let _ = tx.send(Job::CopyProgress { done, total }); if let Some(w) = &wake { w(); } }
+            });
+            let _ = tx.send(Job::Copied { stick, copy, res });
             if let Some(w) = wake { w(); }
         });
     }
@@ -1073,6 +1097,23 @@ impl App {
                 }
                 Err(e) => if remember { self.say(&e, 9.0) },
             },
+            Job::CopyProgress { done, total } => {
+                self.copying = Some((done, total));
+                let pc = if total > 0 { done * 100 / total } else { 0 };
+                self.say(&format!("Copying the stick to this computer… {pc}% ({} of {} MB)", done >> 20, total >> 20), 2.0);
+            }
+            Job::Copied { stick, copy, res } => {
+                self.copying = None;
+                match res {
+                    Ok(c) => {
+                        self.store.settings.devices.retain(|p| p != &stick);
+                        self.store.dirty_settings = true;
+                        self.mount(&copy, true);
+                        self.say(&if c.files == 0 { format!("Local copy already up to date ({} files)", c.same) } else { format!("Copied {} files ({} MB); {} already there. You can take the stick out.", c.files, c.bytes >> 20, c.same) }, 8.0);
+                    }
+                    Err(e) => self.say(&e, 9.0),
+                }
+            }
         }
     }
 }

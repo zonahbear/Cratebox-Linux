@@ -88,4 +88,19 @@ mod tests {
         assert_eq!(std::fs::read(dst.join("PIONEER/rekordbox/export.pdb")).unwrap(), b"db2!");
         let _ = std::fs::remove_dir_all(&base);
     }
+    #[test]
+    fn copy_is_the_same_device_as_the_stick() {
+        let stick = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/rekordbox_usb");
+        let base = std::env::temp_dir().join(format!("cratebox-usbsame-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        let copy = base.join("Cratebox USB").join("rekordbox_usb local");
+        copy_tree(&stick, &copy, |_, _| {}).unwrap();
+        let saved = Default::default();
+        let (a, ta) = crate::playlists::mount_device(&stick, &saved, (70.0, 180.0)).unwrap();
+        let (b, tb) = crate::playlists::mount_device(&copy, &saved, (70.0, 180.0)).unwrap();
+        assert_eq!(a.id, b.id);
+        assert_eq!(ta.iter().map(|t| &t.id).collect::<Vec<_>>(), tb.iter().map(|t| &t.id).collect::<Vec<_>>());
+        assert!(crate::library::scan_dir(&base).is_empty(), "library scans skip the copies");
+        let _ = std::fs::remove_dir_all(&base);
+    }
 }
