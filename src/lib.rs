@@ -7,6 +7,7 @@ pub mod library;
 pub mod mixer;
 pub mod player;
 pub mod ring;
+pub mod remote;
 pub mod fx;
 pub mod beatfx;
 pub mod recorder;

@@ -73,6 +73,11 @@ def main():
                 t.write(tar)
             subprocess.run(["sudo", "tar", "-xzf", t.name, "-C", "/", "--no-overwrite-dir"], check=True)
             os.remove(t.name)
+            # new window-manager shortcuts apply now (no-op outside the Cratebox session)
+            try:
+                subprocess.run(["openbox", "--reconfigure"], capture_output=True)
+            except OSError:
+                pass
             print("Cratebox OS files updated (session, scaling, updater): they apply from the next login.")
     print("Done. Restart Cratebox to use the new version.")
 

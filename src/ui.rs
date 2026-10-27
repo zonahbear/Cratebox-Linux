@@ -51,6 +51,8 @@ pub struct Gui {
     /// Ctrl+F: focus the search box next frame; F12: the shortcuts window
     focus_search: bool,
     keys_open: bool,
+    /// `cratebox --cmd …` lines (the OS's Command-key shortcuts)
+    remote: Option<std::sync::mpsc::Receiver<String>>,
 }
 
 const ROW: f32 = 22.0;
@@ -73,10 +75,11 @@ impl Gui {
         let ctx = cc.egui_ctx.clone();
         let wake: std::sync::Arc<dyn Fn() + Send + Sync> = std::sync::Arc::new(move || ctx.request_repaint());
         app.repaint = Some(wake.clone());
-        app.midi_io.set_wake(wake);
+        app.midi_io.set_wake(wake.clone());
         app.watch_drives();
+        let remote = crate::remote::listen(move || wake());
         Gui { app, deck_rects: [Rect::NOTHING; DECKS], jog_last: [None; DECKS], lane_drag: [None; DECKS], pad_held: None, frames: 0, test_shot: None,
-            rects: Default::default(), uitest: crate::uitest::UiTest::from_env(), heat_open: false, power_open: false, sys: SysStats::new(), battery: (std::time::Instant::now(), read_battery()), power_confirm: None, wave_browse: None, last_sel: usize::MAX, heat_paste: String::new(), hitting: false, focus_search: false, keys_open: false }
+            rects: Default::default(), uitest: crate::uitest::UiTest::from_env(), heat_open: false, power_open: false, sys: SysStats::new(), battery: (std::time::Instant::now(), read_battery()), power_confirm: None, wave_browse: None, last_sel: usize::MAX, heat_paste: String::new(), hitting: false, focus_search: false, keys_open: false, remote }
     }
 
     /// in learn mode a click on a mappable control picks it; returns true if it was used up that way
@@ -1461,6 +1464,9 @@ impl Gui {
             }
             if m.command || m.ctrl {
                 match key {
+                    // Command+Shift X / . come in through the window manager (remote_cmds); Ctrl+Shift does it too
+                    Key::X if m.shift => self.beat1(0),
+                    Key::Period if m.shift => self.beat1(1),
                     Key::A => self.app.list.sel_ids = self.app.list.view.iter().map(|t| t.id.clone()).collect(),
                     Key::F => self.focus_search = true,
                     Key::R => self.app.toggle_rec(),
@@ -1491,6 +1497,8 @@ impl Gui {
                     let Some((side, pidx)) = deck_key(key) else { continue };
                     let i = self.app.midi.side[side];
                     if let Some(p) = pidx { self.app.pad_down(i, p, m.shift); continue; }
+                    // Shift (or a Command combo, which arrives here without Command) never plays or jumps
+                    if m.shift { continue; }
                     let d = &mut self.app.decks[i];
                     match key {
                         Key::Z | Key::M => d.cue_down(),
@@ -1504,6 +1512,22 @@ impl Gui {
                         _ => {}
                     }
                 }
+            }
+        }
+    }
+
+    /// bar 1 at the playhead on the deck under that hand (side 0: deck 1 or 3, side 1: deck 2 or 4)
+    fn beat1(&mut self, side: usize) {
+        let i = self.app.midi.side[side];
+        self.app.decks[i].downbeat_here();
+    }
+    fn remote_cmds(&mut self) {
+        let cmds: Vec<String> = self.remote.as_ref().map(|r| r.try_iter().collect()).unwrap_or_default();
+        for c in cmds {
+            match c.as_str() {
+                "beat1 left" => self.beat1(0),
+                "beat1 right" => self.beat1(1),
+                _ => eprintln!("cratebox: unknown command {c:?}"),
             }
         }
     }
@@ -1875,6 +1899,7 @@ pub const SHORTCUTS: &[(&str, &str)] = &[
     ("F   ;", "Loop ×2"),
     ("C   .", "Beat jump back 4"),
     ("V   /", "Beat jump on 4"),
+    ("⌘⇧X   ⌘⇧.", "Bar 1 at the playhead, left / right deck (Ctrl+Shift works too)"),
     ("1 2 3 4  Q W E R", "Left deck pads 1-8 (Shift: delete hot cue)"),
     ("7 8 9 0  U I O P", "Right deck pads 1-8 (Shift: delete hot cue)"),
     ("`   \\", "Layer: left side 1 ⇄ 3, right side 2 ⇄ 4 (4 decks)"),
@@ -1939,6 +1964,7 @@ impl eframe::App for Gui {
         self.app.poll();
         if std::env::var("CRATEBOX_DEMO").is_ok() { self.demo(); }
         self.keyboard(ctx);
+        self.remote_cmds();
         self.dropped_files(ctx);
         egui::TopBottomPanel::top("header").exact_height(34.0).frame(egui::Frame::new().fill(PANEL).inner_margin(egui::Margin::symmetric(10, 3))).show(ctx, |ui| self.header(ui));
         if self.app.learning() {

@@ -13,7 +13,8 @@ on real sound hardware or a controller. Built for x86-64-v3 CPUs.
 ## Map
 
 ```
-src/main.rs        entry; CPU feature check, --version, --screenshot FILE [FRAMES] (used by tests), --kiosk (full screen)
+src/main.rs        entry; CPU feature check, --version, --screenshot FILE [FRAMES] (used by tests), --kiosk (full screen),
+                   --cmd WORDS (sends to the running app via src/remote.rs: Unix socket, $XDG_RUNTIME_DIR/cratebox.sock)
 src/lib.rs         module list (the binary and tests both use the lib)
 src/app.rs         App: decks, mixer, library, playlists, controller, background jobs; `poll` drains job results each frame
 src/ui.rs          the window, XDJ-style, sized for 1152×720 pt (MacBook10,1 at 2x): header (REC, WAVE, 4 DECKS,
@@ -101,6 +102,8 @@ distro/            Cratebox OS ISO: build-iso.sh remasters Lubuntu 26.04.1 (laye
 ## Gotchas
 
 - 3-deck mode = settings four+three (deck_count()): left layer button switches 1⇄3, right stays on 2; header button cycles 2→3→4.
+- Command(Super) shortcuts: egui drops Super on Linux, so openbox-rc.xml binds them to `cratebox --cmd …`
+  (⌘⇧X / ⌘⇧. = bar 1 on the left / right deck; Ctrl+Shift does the same in-app). Shift+deck key never plays.
 - Layer buttons are learned once (Settings → Controller → Set up layer buttons…): the FLX4's SMART CFX/FADER
   notes aren't in the map. Their LEDs stay off.
 - Decks are XDJ-style screens (platter, time, key, BPM, beat/phrase, hot cues) with buttons under them, or

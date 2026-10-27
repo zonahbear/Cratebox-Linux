@@ -90,3 +90,5 @@
   downloads → ~/Music/Cratebox Downloads, niced, log web.log). cratebox-firefox/firejail removed (too slow mid-set).
 - Next: spec list (Beat 1 shortcuts Cmd+Shift+X / Cmd+Shift+., Camelot colours + quick sort, playlist column,
   load closes manager, load lock, battery 5%/3%, graceful shutdown, power icon, themes, Puffco LED), then Soulseek.
+- Beat 1: ⌘⇧X / ⌘⇧. via openbox keybinds → `cratebox --cmd beat1 left|right` (src/remote.rs socket). Ctrl+Shift fallback.
+  openbox-rc.xml now ships in os-files; cratebox-update runs `openbox --reconfigure`.
