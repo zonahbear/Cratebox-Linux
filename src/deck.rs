@@ -202,6 +202,14 @@ impl Deck {
         self.say(format!("Deck {}: master tempo {}", self.i + 1, if on { "on (tempo changes keep the key)" } else { "off (vinyl: tempo changes the pitch)" }));
     }
 
+    /// empty the deck (shutdown, battery critical); a load still decoding is dropped when it lands
+    pub fn unload(&mut self) {
+        self.playing = false; self.previewing = false;
+        self.post(PlayerCmd::Unload);
+        self.track = None; self.ana = None; self.mono = None; self.duration = 0.0; self.loading = false;
+        self.load_gen += 1;
+    }
+
     // ---- loading: the app decodes and analyses off-thread, then hands the result here ----
     pub fn begin_load(&mut self, t: Track) -> Result<u64, String> {
         if self.locked { return Err(format!("Deck {} is locked. Tap the lock on its screen to unlock it.", self.i + 1)); }

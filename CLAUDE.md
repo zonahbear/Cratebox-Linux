@@ -104,6 +104,8 @@ distro/            Cratebox OS ISO: build-iso.sh remasters Lubuntu 26.04.1 (laye
 - 3-deck mode = settings four+three (deck_count()): left layer button switches 1⇄3, right stays on 2; header button cycles 2→3→4.
 - Command(Super) shortcuts: egui drops Super on Linux, so openbox-rc.xml binds them to `cratebox --cmd …`
   (⌘⇧X / ⌘⇧. = bar 1 on the left / right deck; Ctrl+Shift does the same in-app). Shift+deck key never plays.
+- Battery (ui.rs battery_watch): 5% alert; 3% stops decks + App::eject_all (drives::eject_all thread, SCHED_FIFO 40).
+  Shutdown/restart = App::power_off (save, unload decks, eject, then systemctl). CRATEBOX_FAKE_BATTERY="pc,charging" to try it.
 - Layer buttons are learned once (Settings → Controller → Set up layer buttons…): the FLX4's SMART CFX/FADER
   notes aren't in the map. Their LEDs stay off.
 - Decks are XDJ-style screens (platter, time, key, BPM, beat/phrase, hot cues) with buttons under them, or

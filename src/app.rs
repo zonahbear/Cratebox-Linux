@@ -517,6 +517,41 @@ impl App {
         if matches!(&self.view, View::Dev(x) | View::DevPl(x, _) if x == id) && !has_copy { self.set_view(View::All); } else { self.apply_view(true); }
         self.say(&format!("{} ejected: safe to pull out{}", d.name, if has_copy { ". Playing from the copy on this computer" } else { "" }), 6.0);
     }
+    /// stop every deck (battery critical)
+    pub fn stop_all(&mut self) {
+        let p = self.peers();
+        for d in self.decks.iter_mut() { if d.playing { d.set_playing(false, &p); } }
+    }
+    /// unmount every stick (not the local copies) straight away and take it out of the library; the
+    /// unmounting runs on its own thread (drives::eject_all), then `systemctl then` if given
+    pub fn eject_all(&mut self, then: Option<&'static str>) {
+        let sticks: Vec<_> = self.lists.devices.iter().filter(|d| !crate::usbcopy::is_copy(&d.root)).cloned().collect();
+        for d in &sticks {
+            self.lists.devices.retain(|x| x.id != d.id);
+            self.tracks.retain(|t| t.device.as_deref() != Some(d.id.as_str()));
+            self.store.settings.devices.retain(|p| p != &d.root);
+        }
+        if !sticks.is_empty() {
+            self.reindex();
+            self.store.dirty_settings = true;
+            if matches!(self.view, View::Dev(_) | View::DevPl(..)) { self.set_view(View::All); } else { self.apply_view(true); }
+        }
+        let n = sticks.len();
+        let tx = self.jobs_tx.clone();
+        let wake = self.repaint.clone();
+        crate::drives::eject_all(sticks.into_iter().map(|d| d.root).collect(), then, move |errs| {
+            let msg = if !errs.is_empty() { format!("Couldn't eject {}", errs.join("; ")) } else if n > 0 { format!("USB ejected ({n}): safe to pull out") } else { String::new() };
+            if !msg.is_empty() { let _ = tx.send(Job::Say(msg, 8.0)); }
+            if let Some(w) = wake { w(); }
+        });
+    }
+    /// shut down or restart cleanly: stop REC and save, empty the decks, eject sticks, then systemctl
+    pub fn power_off(&mut self, arg: &'static str) {
+        self.flush_now();
+        for d in self.decks.iter_mut() { d.unload(); }
+        self.say(if arg == "reboot" { "Restarting: decks emptied, ejecting USB…" } else { "Shutting down: decks emptied, ejecting USB…" }, 30.0);
+        self.eject_all(Some(arg));
+    }
     pub fn close_device(&mut self, id: &str) {
         if self.decks.iter().any(|d| d.track.as_ref().and_then(|t| t.device.as_deref()) == Some(id)) { self.say("Load something else on the decks first", 4.0); return; }
         let Some(d) = self.lists.devices.iter().find(|x| x.id == id).cloned() else { return };

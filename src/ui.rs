@@ -39,8 +39,12 @@ pub struct Gui {
     /// the OFF menu (exit to the login screen, restart, shut down) and the action waiting for its confirm
     power_open: bool,
     sys: SysStats,
-    /// last battery read (every 15 s): percent, charging
+    /// last battery read (every 15 s, 5 s when low): percent, charging
     battery: (std::time::Instant, Option<(u32, bool)>),
+    /// battery alerts given since the last charge: 5 = low (OK), 3 = critical (stopped + ejected)
+    bat_alerted: u32,
+    /// the battery alert on screen (5 or 3)
+    bat_dialog: Option<u32>,
     /// WAVE mode: the pop-up library (opened by scrolling, last activity) and the selection it last saw
     wave_browse: Option<std::time::Instant>,
     last_sel: usize,
@@ -83,7 +87,7 @@ impl Gui {
         app.watch_drives();
         let remote = crate::remote::listen(move || wake());
         Gui { app, deck_rects: [Rect::NOTHING; DECKS], jog_last: [None; DECKS], lane_drag: [None; DECKS], pad_held: None, frames: 0, test_shot: None,
-            rects: Default::default(), uitest: crate::uitest::UiTest::from_env(), heat_open: false, power_open: false, sys: SysStats::new(), battery: (std::time::Instant::now(), read_battery()), power_confirm: None, wave_browse: None, last_sel: usize::MAX, heat_paste: String::new(), hitting: false, focus_search: false, keys_open: false, remote, seen_loads: 0, pl_names: (0, Default::default()) }
+            rects: Default::default(), uitest: crate::uitest::UiTest::from_env(), heat_open: false, power_open: false, sys: SysStats::new(), battery: (std::time::Instant::now().checked_sub(std::time::Duration::from_secs(60)).unwrap_or_else(std::time::Instant::now), read_battery()), power_confirm: None, bat_alerted: 100, bat_dialog: None, wave_browse: None, last_sel: usize::MAX, heat_paste: String::new(), hitting: false, focus_search: false, keys_open: false, remote, seen_loads: 0, pl_names: (0, Default::default()) }
     }
 
     /// in learn mode a click on a mappable control picks it; returns true if it was used up that way
@@ -146,6 +150,12 @@ impl Gui {
                 ui.add_sized(vec2((ui.available_width() - right_w).max(40.0), 20.0), egui::Label::new(egui::RichText::new(st).color(MUTED).size(11.5)).truncate());
             }
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                // power, in the far right corner
+                let r = button(ui, "", vec2(26.0, 22.0), self.power_open, RED, 11.0).on_hover_text("Exit to the login screen, restart or shut down");
+                paint_power(ui.painter(), r.rect, if self.power_open { BG } else { RED });
+                self.reg("power", r.rect);
+                if r.clicked() { self.power_open = !self.power_open; self.power_confirm = None; }
+                ui.add_space(8.0);
                 let lv = [level(self.app.status_snap.master_meter[0]), level(self.app.status_snap.master_meter[1])];
                 meter(ui, vec2(5.0, 24.0), lv[1]);
                 meter(ui, vec2(5.0, 24.0), lv[0]);
@@ -156,9 +166,6 @@ impl Gui {
                 ui.label(egui::RichText::new(db_text(crate::engine::master_level_gain(self.app.mixer.master as f64))).font(mono(10.0)).color(FG));
                 ui.label(egui::RichText::new("MASTER").size(9.5).color(MUTED));
                 ui.add_space(6.0);
-                let r = button(ui, "OFF", vec2(34.0, 22.0), self.power_open, RED, 11.0).on_hover_text("Exit to the login screen, restart or shut down");
-                self.reg("power", r.rect);
-                if r.clicked() { self.power_open = !self.power_open; self.power_confirm = None; }
                 let r = button(ui, "⚙", vec2(26.0, 22.0), self.app.ui.settings_open, deck_color(0), 13.0).on_hover_text("Settings");
                 self.reg("settings", r.rect);
                 if r.clicked() { self.app.ui.settings_open = !self.app.ui.settings_open; }
@@ -204,13 +211,11 @@ impl Gui {
                 let r = button(ui, &label, vec2(62.0, 22.0), lit, RED, 11.5).on_hover_text("Record the master to a WAV file (Settings → Sound says where)");
                 self.reg("rec", r.rect);
                 if r.clicked() { self.app.toggle_rec(); }
-                // battery, left of REC: red "PLUG IN SOON" at 20 %, blinking "PLUG IN NOW" at 10 % (on battery only)
-                if self.battery.0.elapsed().as_secs() >= 15 { self.battery = (std::time::Instant::now(), read_battery()); }
+                // battery, left of REC: red "PLUG IN" at 20 %, blinking at 10 % (on battery only; alerts at 5 and 3 %)
                 if let Some((pc, charging)) = self.battery.1 {
                     // ▲ charging, ▼ on battery
                     let (txt, c) = if charging { (format!("{pc}% ▲"), Color32::from_rgb(0x5c, 0xd6, 0x7a)) }
-                        else if pc <= 10 { (format!("PLUG IN NOW {pc}% ▼"), RED) }
-                        else if pc <= 20 { (format!("PLUG IN SOON {pc}% ▼"), RED) }
+                        else if pc <= 20 { (format!("PLUG IN {pc}% ▼"), RED) }
                         else { (format!("{pc}% ▼"), MUTED) };
                     let blink = !charging && pc <= 10;
                     let t = ui.ctx().input(|i| i.time);
@@ -1551,6 +1556,52 @@ impl Gui {
         }
     }
 
+    /// 5 %: a warning with OK. 3 %: stop every deck and eject sticks (a stick pulled by a dying laptop can
+    /// corrupt), then ask: plugged in, or shut down cleanly now. Once each per discharge.
+    fn battery_watch(&mut self) {
+        let every = if self.battery.1.is_some_and(|(pc, ch)| !ch && pc <= 8) { 5 } else { 15 };
+        if self.battery.0.elapsed().as_secs() < every { return; }
+        self.battery = (std::time::Instant::now(), read_battery());
+        let Some((pc, charging)) = self.battery.1 else { return };
+        if charging { self.bat_alerted = 100; if self.bat_dialog == Some(5) { self.bat_dialog = None; } return; }
+        if pc <= 3 && self.bat_alerted > 3 {
+            self.bat_alerted = 3;
+            self.app.stop_all();
+            self.app.eject_all(None);
+            self.bat_dialog = Some(3);
+        } else if pc <= 5 && self.bat_alerted > 5 {
+            self.bat_alerted = 5;
+            self.bat_dialog = Some(5);
+        }
+    }
+    fn battery_dialog(&mut self, ctx: &egui::Context) {
+        let Some(level) = self.bat_dialog else { return };
+        let pc = self.battery.1.map(|b| b.0).unwrap_or(level);
+        egui::Window::new("battery").title_bar(false).resizable(false).collapsible(false).order(egui::Order::Foreground)
+            .anchor(egui::Align2::CENTER_CENTER, vec2(0.0, 0.0)).fixed_size(vec2(420.0, 0.0))
+            .frame(egui::Frame::window(&ctx.style()).fill(PANEL).stroke(Stroke::new(2.0_f32, RED)))
+            .show(ctx, |ui| {
+                ui.spacing_mut().item_spacing = vec2(8.0, 8.0);
+                if level > 3 {
+                    ui.label(egui::RichText::new(format!("Battery low: {pc}%")).font(bold(18.0)).color(RED));
+                    ui.label(egui::RichText::new("Plug in now. At 3% Cratebox stops the music and ejects the USB stick so it can't be damaged.").size(13.0).color(FG));
+                    if button(ui, "OK", vec2(ui.available_width(), 32.0), false, FG, 13.0).clicked() { self.bat_dialog = None; }
+                } else {
+                    ui.label(egui::RichText::new(format!("Battery critical: {pc}%")).font(bold(18.0)).color(RED));
+                    ui.label(egui::RichText::new("Playback stopped and the USB stick was ejected so it can't be damaged if the laptop dies.").size(13.0).color(FG));
+                    let half = vec2((ui.available_width() - 8.0) / 2.0, 34.0);
+                    ui.horizontal(|ui| {
+                        if button(ui, "I've plugged in", half, false, deck_color(0), 13.0).clicked() {
+                            self.bat_dialog = None;
+                            self.battery = (std::time::Instant::now(), read_battery());
+                            if !self.battery.1.is_some_and(|b| b.1) { self.app.say("Still on battery: check the charger", 6.0); }
+                        }
+                        if button(ui, "Shut down now", half, true, RED, 13.0).clicked() { self.bat_dialog = None; self.app.power_off("poweroff"); }
+                    });
+                }
+            });
+    }
+
     /// bar 1 at the playhead on the deck under that hand (side 0: deck 1 or 3, side 1: deck 2 or 4)
     fn beat1(&mut self, side: usize) {
         let i = self.app.midi.side[side];
@@ -1683,11 +1734,8 @@ impl Gui {
                 ui.horizontal(|ui| {
                     let half = vec2((w.x - 6.0) / 2.0, 28.0);
                     if button(ui, what, half, true, RED, 12.0).clicked() {
-                        let arg = if what == "Shut down" { "poweroff" } else { "reboot" };
-                        match std::process::Command::new("systemctl").arg(arg).spawn() {
-                            Ok(_) => self.app.say(&format!("{what}…"), 10.0),
-                            Err(e) => self.app.say(&format!("Couldn't {}: {e}", what.to_lowercase()), 8.0),
-                        }
+                        // empty the decks and eject sticks first (App::power_off)
+                        self.app.power_off(if what == "Shut down" { "poweroff" } else { "reboot" });
                         self.power_open = false;
                     }
                     if button(ui, "Cancel", half, false, FG, 12.0).clicked() { self.power_confirm = None; }
@@ -1907,6 +1955,8 @@ impl SysStats {
 }
 /// the laptop battery from /sys/class/power_supply: (percent, charging or full on AC); None on a desktop
 fn read_battery() -> Option<(u32, bool)> {
+    // CRATEBOX_FAKE_BATTERY="4,0": percent, charging (screenshots and trying the alerts)
+    if let Ok(f) = std::env::var("CRATEBOX_FAKE_BATTERY") { let mut it = f.split(','); return Some((it.next()?.trim().parse().ok()?, it.next().is_some_and(|c| c.trim() == "1"))); }
     for e in std::fs::read_dir("/sys/class/power_supply").ok()?.flatten() {
         let p = e.path();
         if std::fs::read_to_string(p.join("type")).map(|t| t.trim() == "Battery").unwrap_or(false) {
@@ -1916,6 +1966,16 @@ fn read_battery() -> Option<(u32, bool)> {
         }
     }
     None
+}
+/// the power symbol: a ring open at the top with a bar through the gap
+fn paint_power(p: &egui::Painter, r: Rect, c: Color32) {
+    let (ctr, rad) = (r.center() + vec2(0.0, 0.5), 6.0);
+    let pts: Vec<egui::Pos2> = (0..=24).map(|k| {
+        let a = (-60.0_f32 + 300.0 * k as f32 / 24.0 - 90.0).to_radians() + std::f32::consts::PI;
+        ctr + vec2(a.cos(), a.sin()) * rad
+    }).collect();
+    p.add(egui::Shape::line(pts, Stroke::new(1.7_f32, c)));
+    p.line_segment([ctr + vec2(0.0, -rad - 1.0), ctr + vec2(0.0, -1.0)], Stroke::new(1.7_f32, c));
 }
 /// a padlock: shackle closed when locked, lifted open when not
 fn paint_lock(p: &egui::Painter, r: Rect, locked: bool, c: Color32) {
@@ -2016,6 +2076,7 @@ impl eframe::App for Gui {
         if std::env::var("CRATEBOX_DEMO").is_ok() { self.demo(); }
         self.keyboard(ctx);
         self.remote_cmds();
+        self.battery_watch();
         self.dropped_files(ctx);
         egui::TopBottomPanel::top("header").exact_height(34.0).frame(egui::Frame::new().fill(PANEL).inner_margin(egui::Margin::symmetric(10, 3))).show(ctx, |ui| self.header(ui));
         if self.app.learning() {
@@ -2086,6 +2147,7 @@ impl eframe::App for Gui {
         if self.app.ui.settings_open { self.settings(ctx); }
         if self.power_open { self.power_menu(ctx); }
         self.wave_browser(ctx);
+        self.battery_dialog(ctx);
         if self.heat_open { self.heat_panel(ctx); } else { self.app.heat.set_panel(false); }
         if self.keys_open { self.keys_window(ctx); }
         self.dialogs(ctx);
