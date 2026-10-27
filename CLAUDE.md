@@ -100,6 +100,7 @@ distro/            Cratebox OS ISO: build-iso.sh remasters Lubuntu 26.04.1 (laye
 
 ## Gotchas
 
+- 3-deck mode = settings four+three (deck_count()): left layer button switches 1⇄3, right stays on 2; header button cycles 2→3→4.
 - Layer buttons are learned once (Settings → Controller → Set up layer buttons…): the FLX4's SMART CFX/FADER
   notes aren't in the map. Their LEDs stay off.
 - Decks are XDJ-style screens (platter, time, key, BPM, beat/phrase, hot cues) with buttons under them, or

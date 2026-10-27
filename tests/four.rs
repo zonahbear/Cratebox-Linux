@@ -93,6 +93,16 @@ fn four_decks() {
     wait(&mut app, 5.0, "puffco gone", |a| !a.fx.puff_ready);
     assert_eq!(app.fx.fx, FxKind::Echo);
 
+    // three decks: 1 and 3 share the left side, deck 2 has the right alone (its layer button does nothing)
+    app.set_decks(3);
+    assert!(app.deck_active(2) && !app.deck_active(3) && app.mixer.active == [true, true, true, false]);
+    midi(&mut app, &[0x96, 0x02, 0x7f]);
+    assert_eq!(app.midi.side[1], 1, "right side stays on deck 2");
+    midi(&mut app, &[0x96, 0x01, 0x7f]);
+    let left = app.midi.side[0];
+    midi(&mut app, &[0x96, 0x01, 0x7f]);
+    assert!(left != app.midi.side[0] && [0, 2].contains(&left) && [0, 2].contains(&app.midi.side[0]), "left switches 1 ⇄ 3");
+
     // two decks again: deck 3 stops and hides
     app.set_four(false);
     assert!(!app.deck_active(2) && !app.decks[2].playing);
