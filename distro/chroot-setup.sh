@@ -61,7 +61,14 @@ if [ -z "${SKIP_THIRD_PARTY:-}" ]; then
     git -C /tmp/fthd checkout -q 6dc8cd85e87993ff21cb01eb333ff42afb058551
     git clone -q https://github.com/patjak/facetimehd-firmware /tmp/fthd-fw
     git -C /tmp/fthd-fw checkout -q 60ee21228d9ca00a7bd84fdaefaff00a81f1db91
-    make -C /tmp/fthd-fw
+    # the firmware itself is hash-checked by the script; the optional colour calibration files from
+    # Apple's camera assistant fail their hash on the runner (2026-10-27), so those may be skipped
+    if ! make -C /tmp/fthd-fw > /tmp/fthd-fw.log 2>&1; then
+        cat /tmp/fthd-fw.log
+        grep -q 'Extracted firmware version 5.60.0' /tmp/fthd-fw.log && ! grep -q 'Mismatching firmware hash' /tmp/fthd-fw.log \
+            || { echo "FaceTime HD firmware extraction failed" >&2; exit 1; }
+        echo "FaceTime HD: firmware OK, colour calibration files skipped"
+    fi
     make -C /tmp/fthd-fw install
     [ -s /usr/lib/firmware/facetimehd/firmware.bin ] || [ -s /lib/firmware/facetimehd/firmware.bin ]
     fver=$(sed -n 's/^PACKAGE_VERSION=//p' /tmp/fthd/dkms.conf)

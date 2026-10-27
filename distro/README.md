@@ -127,7 +127,8 @@ Then play through the speakers after a **warm reboot** and after a **cold boot**
 
 - Hibernation is left out, to keep this scoped.
 - FaceTime HD camera: patjak/facetimehd (DKMS) and facetimehd-firmware 5.60.0 (cut from Apple's
-  macOS 10.12.6 update at build time), pinned commits. guvcview showed a picture on the MacBook with a
+  macOS 10.12.6 update at build time), pinned commits. If the sensor colour files fail their hash (they
+  did on the runner, 2026-10-27), the build carries on without them: picture works, colours less tuned. guvcview showed a picture on the MacBook with a
   hand-built copy; browsers not yet checked.
 - Not done for boot time: a host-only or lz4 initramfs. It would load faster, but a wrong host-only
   guess leaves the machine unbootable, so it waits for a timed boot on the MacBook first.
