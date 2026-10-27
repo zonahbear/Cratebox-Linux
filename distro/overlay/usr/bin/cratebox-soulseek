@@ -1,0 +1,23 @@
+#!/bin/sh
+# SOULSEEK button: Nicotine+ (already on Cratebox OS), saving into ~/Music/Cratebox Downloads, which Cratebox
+# adds to the collection (and copies to a plugged-in stick). The session's HiDPI settings scale it to 2x and
+# openbox opens it full screen; a second press brings the running window back. Niced, like the WEB button,
+# so a busy transfer can't take CPU from the audio.
+DATA="$HOME/.local/share/cratebox"
+DL="$HOME/Music/Cratebox Downloads"
+CONF="$HOME/.config/nicotine/config"
+LOG="$DATA/soulseek.log"
+mkdir -p "$DATA" "$DL"
+exec >>"$LOG" 2>&1
+echo "--- $(date) SOULSEEK button"
+# first run: point downloads at the Cratebox folder before Nicotine+ writes its own config (it fills in
+# the rest with its defaults); afterwards the kiosk session keeps the setting
+if [ ! -f "$CONF" ]; then
+    mkdir -p "$(dirname "$CONF")"
+    printf '[transfers]\ndownloaddir = %s\n' "$DL" > "$CONF"
+elif grep -q '^downloaddir *=' "$CONF"; then
+    sed -i "s|^downloaddir *=.*|downloaddir = $DL|" "$CONF"
+fi
+if command -v nicotine >/dev/null; then exec nice -n 10 nicotine "$@"; fi
+echo "Nicotine+ isn't installed"
+exit 1

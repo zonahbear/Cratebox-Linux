@@ -4,6 +4,15 @@ Newest first. Each update arrives through `cratebox-update` (no new ISO needed) 
 
 ## 27 October 2026 (evening)
 
+- SOULSEEK button (magnifying glass) in the header opens Nicotine+, saving straight into the collection.
+- Soulseek, Chrome and the file manager open as normal windows over Cratebox: drag the title bar to
+  move, drag an edge to resize, double-click the title to maximise, Alt+Tab to switch.
+- Settings has tabs with icons down the left: Look, Library, Decks, Sound, Controller, Wi-Fi,
+  Bluetooth, rekordbox.
+- Wi-Fi and Bluetooth inside Cratebox: switch them on or off, scan, join a network (with its password),
+  pair, connect, disconnect and forget devices. Click the Wi-Fi or Bluetooth readout in the header to
+  jump there.
+- Fixed a stray vertical line through the WEB (globe) icon.
 - The scrolling waveforms are drawn once into pictures kept on the graphics chip and slid by fractions
   of a pixel every frame: no more stepping 4, 5, 4 pixels a frame, no flickering bars, and less work
   for the MacBook each frame.

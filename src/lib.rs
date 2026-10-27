@@ -19,6 +19,7 @@ pub mod rekordbox;
 pub mod playlists;
 pub mod usbcopy;
 pub mod drives;
+pub mod net;
 pub mod store;
 pub mod audio_io;
 pub mod midi_io;

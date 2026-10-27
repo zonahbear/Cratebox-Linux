@@ -31,7 +31,7 @@ jobs:
           # small Cratebox OS files cratebox-update may refresh too (session, updater, 2x scaling); nothing
           # that needs a rebuild step (grub, initramfs) goes in here
           tar -czf target/x86_64-unknown-linux-gnu/release/os-files.tar.gz --owner=0 --group=0 -C distro/overlay \
-            usr/bin/cratebox-update usr/bin/cratebox-web usr/libexec/cratebox-kiosk-session usr/share/xsessions/cratebox.desktop \
+            usr/bin/cratebox-update usr/bin/cratebox-web usr/bin/cratebox-soulseek usr/libexec/cratebox-kiosk-session usr/share/xsessions/cratebox.desktop \
             usr/share/applications/cratebox-update.desktop usr/share/cratebox-os/openbox-rc.xml etc/X11/Xsession.d/45cratebox-hidpi
           cd target/x86_64-unknown-linux-gnu/release
           sha256sum cratebox > cratebox.sha256

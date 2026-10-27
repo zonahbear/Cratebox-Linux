@@ -79,8 +79,8 @@ pub fn button(ui: &mut Ui, text: &str, size: Vec2, lit: bool, accent: Color32, f
     r
 }
 /// line icons for the header buttons (drawn, so they don't depend on a font having the glyph)
-#[derive(Clone, Copy)]
-pub enum Icon { Folder, Globe, List, Wave }
+#[derive(Clone, Copy, PartialEq)]
+pub enum Icon { Folder, Globe, List, Wave, Search, Palette, Deck, Speaker, Knob, Wifi, Bluetooth, Usb }
 pub fn paint_icon(p: &egui::Painter, r: Rect, icon: Icon, c: Color32) {
     let st = Stroke::new(1.5_f32, c);
     let o = r.center();
@@ -95,8 +95,13 @@ pub fn paint_icon(p: &egui::Painter, r: Rect, icon: Icon, c: Color32) {
         Icon::Globe => {
             p.circle_stroke(o, 6.5, st);
             p.line_segment([o - vec2(6.5, 0.0), o + vec2(6.5, 0.0)], st);
-            let pts: Vec<Pos2> = (0..=16).map(|k| { let a = PI * k as f32 / 8.0; o + vec2(2.8 * a.cos(), 6.5 * a.sin()) }).collect();
+            let pts: Vec<Pos2> = (0..16).map(|k| { let a = PI * k as f32 / 8.0; o + vec2(2.8 * a.cos(), 6.5 * a.sin()) }).collect();
             p.add(egui::Shape::closed_line(pts, st));
+        }
+        Icon::Search => {
+            let c0 = o + vec2(-1.5, -1.5);
+            p.circle_stroke(c0, 4.8, st);
+            p.line_segment([c0 + vec2(3.5, 3.5), o + vec2(6.0, 6.0)], Stroke::new(2.0_f32, c));
         }
         Icon::List => {
             for k in 0..3 {
@@ -104,6 +109,52 @@ pub fn paint_icon(p: &egui::Painter, r: Rect, icon: Icon, c: Color32) {
                 p.circle_filled(pos2(o.x - 6.0, y), 1.1, c);
                 p.line_segment([pos2(o.x - 3.0, y), pos2(o.x + 7.0, y)], st);
             }
+        }
+        Icon::Palette => {
+            p.circle_stroke(o, 6.5, st);
+            for (dx, dy) in [(-3.0, -2.0), (0.5, -3.8), (3.6, -1.2)] { p.circle_filled(o + vec2(dx, dy), 1.2, c); }
+            p.circle_filled(o + vec2(1.5, 3.0), 1.8, c);
+        }
+        Icon::Deck => {
+            p.circle_stroke(o, 6.5, st);
+            p.circle_filled(o, 1.6, c);
+            p.line_segment([o, o + vec2(4.0, -4.0)], st);
+        }
+        Icon::Speaker => {
+            let pts = vec![o + vec2(-6.5, -2.2), o + vec2(-3.5, -2.2), o + vec2(0.0, -5.5), o + vec2(0.0, 5.5), o + vec2(-3.5, 2.2), o + vec2(-6.5, 2.2)];
+            p.add(egui::Shape::closed_line(pts, st));
+            for rr in [3.0_f32, 5.8] {
+                let arc: Vec<Pos2> = (0..=8).map(|k| { let a = -0.8 + 1.6 * k as f32 / 8.0; o + vec2(1.0 + rr * a.cos(), rr * a.sin()) }).collect();
+                p.add(egui::Shape::line(arc, st));
+            }
+        }
+        Icon::Knob => {
+            for (k, x) in [-4.5_f32, 0.0, 4.5].iter().enumerate() {
+                p.line_segment([pos2(o.x + x, o.y - 6.5), pos2(o.x + x, o.y + 6.5)], Stroke::new(1.0_f32, c));
+                let y = o.y + [2.5, -3.0, 0.5][k];
+                p.rect_filled(Rect::from_center_size(pos2(o.x + x, y), vec2(3.6, 2.6)), 0.5, c);
+            }
+        }
+        Icon::Wifi => {
+            p.circle_filled(o + vec2(0.0, 5.0), 1.4, c);
+            for rr in [3.5_f32, 6.5, 9.5] {
+                let arc: Vec<Pos2> = (0..=10).map(|k| { let a = -PI / 2.0 - 0.75 + 1.5 * k as f32 / 10.0; o + vec2(rr * a.cos(), 5.0 + rr * a.sin()) }).collect();
+                p.add(egui::Shape::line(arc, st));
+            }
+        }
+        Icon::Bluetooth => {
+            let (t, b) = (o + vec2(0.0, -7.0), o + vec2(0.0, 7.0));
+            p.line_segment([t, b], st);
+            p.add(egui::Shape::line(vec![o + vec2(-4.0, -3.5), o + vec2(4.0, 3.5), b], st));
+            p.add(egui::Shape::line(vec![o + vec2(-4.0, 3.5), o + vec2(4.0, -3.5), t], st));
+        }
+        Icon::Usb => {
+            let b = Rect::from_center_size(o + vec2(0.0, 2.0), vec2(8.0, 9.0));
+            p.rect_stroke(b, 1.5, st, StrokeKind::Middle);
+            let h = Rect::from_min_max(pos2(o.x - 3.0, b.top() - 5.0), pos2(o.x + 3.0, b.top()));
+            p.rect_stroke(h, 0.5, st, StrokeKind::Middle);
+            // the plug's two contacts, so it reads as a stick, not a padlock
+            for dx in [-1.3, 1.3] { p.rect_filled(Rect::from_center_size(pos2(o.x + dx, b.top() - 2.5), vec2(1.2, 1.2)), 0.0, c); }
         }
         Icon::Wave => {
             let hs = [1.0, 3.5, 6.0, 2.5, 5.0, 2.0, 4.0, 1.0];

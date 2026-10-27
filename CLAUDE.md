@@ -40,6 +40,7 @@ src/maps.rs        GENERATED from the web app's MIXXX_MAPS; don't hand-edit (reg
 src/midi_io.rs audio_io.rs   midir / cpal device handling (rescans, "no output" timer mode)
 src/store.rs       JSON persistence in ~/.local/share/cratebox ($XDG_DATA_HOME, or $CRATEBOX_DATA); the 1 s saves
                    write on a "cratebox-save" thread (flush_bg), flush() drains it then writes inline
+src/net.rs         Settings → Wi-Fi / Bluetooth: nmcli + bluetoothctl on a "cratebox-net" worker thread (scans only on request)
 src/ring.rs        lock-free ring buffer
 src/fx.rs          Beat FX / Pad FX DSP (FxUnit: one per channel insert + master), port of the iOS FxUnit
 src/beatfx.rs      BEAT FX unit + PAD FX state on the UI thread; sends beat clocks every 100 ms
@@ -123,6 +124,9 @@ distro/            Cratebox OS ISO: build-iso.sh remasters Lubuntu 26.04.1 (laye
   app.rs adopt_rb_grid at load). Settings → rekordbox → Compare grids logs bar-1 offsets to grid-compare.log
   (evidence for the "bar 1 half a bar late" report; synthetic tests are all on bar 1, so tuning needs real tracks).
 - rekordbox is read-only here: never writes to a stick (the web app's playlist writer isn't ported).
+- Header launchers: WEB = cratebox-web (Chrome), SOULSEEK = cratebox-soulseek (Nicotine+), FILES = pcmanfm-qt; openbox-rc.xml
+  gives every window but Cratebox a frame at 80%, resizable. Settings is tabbed (SETTINGS_TABS in ui.rs, one fn per tab).
+- egui closed_line: never repeat the first point at the end (the zero-length segment drew a spike through the globe icon).
 - Binary refuses to run on CPUs without AVX2/FMA/BMI2 and says how to rebuild.
 - Scrolling lanes are GPU tiles (widgets::WaveCache, 512 px at normal speed, linear filtering, drawn at fractional x,
   stretched for tempo; Gui.lane_cache). Don't go back to whole-pixel meshes: that stepped 4/5 px a frame.
