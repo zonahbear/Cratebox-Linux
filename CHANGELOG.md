@@ -4,6 +4,9 @@ Newest first. Each update arrives through `cratebox-update` (no new ISO needed) 
 
 ## 27 October 2026 (evening)
 
+- The scrolling waveforms are drawn once into pictures kept on the graphics chip and slid by fractions
+  of a pixel every frame: no more stepping 4, 5, 4 pixels a frame, no flickering bars, and less work
+  for the MacBook each frame.
 - Scrolling waveforms move by an exact amount every screen refresh, so they glide instead of shuffling,
   and they no longer wobble when the sound card's reported delay changes.
 - Settings → Look → "Show frame rate in the header": shows frames per second and missed screen

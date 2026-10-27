@@ -104,3 +104,4 @@
 - Perf pass: store.flush_bg (serialise on UI, write on "cratebox-save" thread; failures re-dirty), CRATEBOX_PROFILE=1 frame timer. UI avg ~1.5 ms/frame in Xvfb; the 1 s analysis.json write was the stall suspect.
 - CHANGELOG.md added (plain-language, newest first). Next: Soulseek native client (paused), more settings if Jonah asks.
 - 2026-10-27 eve: Jonah's video (IMG_9300) of waveform stutter: measured 13.6±1.6 px per 30fps camera frame, no long freezes. Fix: frame clock in deck.rs (refresh-quantized), eased vis_delay in App, show_fps header readout. Real cause on the MacBook unconfirmed until Jonah reports the FPS readout.
+- 2026-10-27 eve: lanes moved to GPU tiles (WaveCache) after Jonah's bug report on whole-pixel stepping; Xvfb llvmpipe 46→49 fps.

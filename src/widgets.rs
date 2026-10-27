@@ -295,19 +295,15 @@ fn agg(peak: &[u8], rms: &[u8], low: &[u8], mid: &[u8], high: &[u8], a: i64, b: 
 }
 fn scale(c: Color32, k: f32) -> Color32 { Color32::from_rgb((c.r() as f32 * k) as u8, (c.g() as f32 * k) as u8, (c.b() as f32 * k) as u8) }
 
-/// one column at x (width w) centred on mid_y with half-height `half`
-pub fn wave_col(m: &mut Mesh, x: f32, w: f32, mid_y: f32, half: f32, v: Col, rgb_style: bool, dim: f32) {
-    let bar = |m: &mut Mesh, h: f32, col: Color32| { if h > 0.0 { m.add_colored_rect(Rect::from_min_max(pos2(x, mid_y - h), pos2(x + w, mid_y + h)), col); } };
+/// one column's bars, outermost first: (half-height, colour)
+fn col_bars(half: f32, v: Col, rgb_style: bool, dim: f32) -> [(f32, Color32); 3] {
     if !rgb_style {
         // 3-band: lows blue, mids amber, highs white, layered
         let amp = (v.peak as f32 / 255.0).max(0.25);
         let hl = v.low as f32 / 255.0 * half * amp;
         let hm = v.mid as f32 / 255.0 * half * 0.72 * amp;
         let hh = v.high as f32 / 255.0 * half * 0.42 * amp;
-        bar(m, hl, scale(Color32::from_rgb(0x1f, 0x6f, 0xe0), dim));
-        bar(m, hm, scale(Color32::from_rgb(0xe8, 0x96, 0x2e), dim));
-        bar(m, hh, scale(Color32::from_rgb(0xf2, 0xf5, 0xf8), dim));
-        return;
+        return [(hl, scale(Color32::from_rgb(0x1f, 0x6f, 0xe0), dim)), (hm, scale(Color32::from_rgb(0xe8, 0x96, 0x2e), dim)), (hh, scale(Color32::from_rgb(0xf2, 0xf5, 0xf8), dim))];
     }
     // RGB: red = lows, green = mids, blue = highs; brightness follows loudness; RMS core lighter.
     // squaring the band levels lets the dominant band set the hue (kicks red, hats blue)
@@ -320,12 +316,49 @@ pub fn wave_col(m: &mut Mesh, x: f32, w: f32, mid_y: f32, half: f32, v: Col, rgb
     let core = Color32::from_rgb(((r * 150.0 + 105.0) * bri).min(255.0) as u8, ((g * 150.0 + 105.0) * bri).min(255.0) as u8, ((b * 150.0 + 105.0) * bri).min(255.0) as u8);
     let ph = (amp * half).round();
     let rh = (v.rms as f32 / 255.0 * half).round();
-    bar(m, ph, outer);
-    bar(m, rh.min(ph), core);
+    [(ph, outer), (rh.min(ph), core), (0.0, core)]
+}
+
+/// one column at x (width w) centred on mid_y with half-height `half`
+pub fn wave_col(m: &mut Mesh, x: f32, w: f32, mid_y: f32, half: f32, v: Col, rgb_style: bool, dim: f32) {
+    for (h, col) in col_bars(half, v, rgb_style, dim) {
+        if h > 0.0 { m.add_colored_rect(Rect::from_min_max(pos2(x, mid_y - h), pos2(x + w, mid_y + h)), col); }
+    }
+}
+
+/// the scrolling waveform's pictures, cut into tiles of TILE physical pixels at the deck's normal speed and
+/// kept on the GPU. Drawn every frame at the exact (fractional) position with linear filtering, so the
+/// waveform glides by fractions of a pixel instead of stepping whole pixels (4, 5, 4… px a frame at
+/// 60 Hz was the judder) and no column is re-cut or re-drawn while it scrolls. Tempo changes stretch the
+/// tiles; a new zoom, height, style or analysis starts over.
+#[derive(Default)]
+pub struct WaveCache { key: (usize, usize, u64, u32, u32, bool), tiles: std::collections::HashMap<i64, egui::TextureHandle> }
+const TILE: usize = 512;
+impl WaveCache {
+    fn tile(&mut self, ctx: &egui::Context, w: &Wave, k: i64, cps: f64, hp: usize, rgb_style: bool) -> egui::TextureId {
+        self.tiles.entry(k).or_insert_with(|| {
+            let mut img = egui::ColorImage::filled([TILE, hp], Color32::TRANSPARENT);
+            let mid = hp as f32 / 2.0;
+            let half = mid - 2.0;
+            for x in 0..TILE {
+                let c = k * TILE as i64 + x as i64;
+                let k0 = (c as f64 / cps * w.wps).floor() as i64;
+                let k1 = ((c + 1) as f64 / cps * w.wps).floor() as i64;
+                if k1 < 0 || k0 >= w.peak.len() as i64 { continue; }
+                let v = agg(&w.peak, &w.rms, &w.low, &w.mid, &w.high, k0, k1);
+                for (h, col) in col_bars(half, v, rgb_style, 1.0) {
+                    if h <= 0.0 { continue; }
+                    let (y0, y1) = (((mid - h).round().max(0.0)) as usize, ((mid + h).round() as usize).min(hp));
+                    for y in y0..y1 { img.pixels[y * TILE + x] = col; }
+                }
+            }
+            ctx.load_texture(format!("wave{k}"), img, egui::TextureOptions::LINEAR)
+        }).id()
+    }
 }
 
 /// the scrolling waveform for deck `i` (tempo-scaled like rekordbox: synced decks line up)
-pub fn paint_lane(p: &egui::Painter, rect: Rect, d: &Deck, i: usize, zoom: f64, rgb_style: bool) {
+pub fn paint_lane(p: &egui::Painter, rect: Rect, d: &Deck, i: usize, zoom: f64, rgb_style: bool, cache: &mut WaveCache) {
     p.rect_filled(rect, 0.0, WAVE_BG());
     let col = deck_color(i);
     let mid = rect.center().y;
@@ -340,30 +373,31 @@ pub fn paint_lane(p: &egui::Painter, rect: Rect, d: &Deck, i: usize, zoom: f64, 
     let t = d.vis_now();
     let pps = rect.width() as f64 / zoom / d.rate().max(0.05);
     let t0 = t - (cx - rect.left()) as f64 / pps;
-    let mut m = Mesh::default();
-    let half = rect.height() / 2.0 - 2.0;
-    // one column per physical pixel, fixed to the track's timeline (column c covers c/cps..(c+1)/cps
-    // seconds), so a column keeps its samples as it scrolls instead of being re-cut every frame (that
-    // re-cutting is what made it shimmer); only the whole picture slides, in whole physical pixels
     let ppp = p.ctx().pixels_per_point();
-    let step = 1.0 / ppp;
-    let cps = pps / step as f64;
-    let c0 = (t0 * cps).floor() as i64;
-    let x0 = rect.left() + ((((c0 as f64 / cps - t0) * pps) as f32 * ppp).round() / ppp);
+    // tiles at normal speed: cps columns (physical pixels) per second of track; on screen each lasts 1/cps s
+    let cps = rect.width() as f64 * ppp as f64 / zoom;
+    let hp = (rect.height() * ppp).round().max(4.0) as usize;
+    let key = (w.peak.as_ptr() as usize, w.peak.len(), zoom.to_bits(), hp as u32, ppp.to_bits(), rgb_style);
+    if cache.key != key { cache.tiles.clear(); cache.key = key; }
+    let t1 = t + (rect.right() - cx) as f64 / pps;
+    let (k0, k1) = ((t0 * cps / TILE as f64).floor() as i64, (t1 * cps / TILE as f64).floor() as i64);
+    cache.tiles.retain(|k, _| *k >= k0 - 2 && *k <= k1 + 2);
     let clip = p.with_clip_rect(rect);
-    let mut c = c0;
-    let mut x = x0;
-    while x < rect.right() {
-        let k0 = (c as f64 / cps * w.wps).floor() as i64;
-        let k1 = ((c + 1) as f64 / cps * w.wps).floor() as i64;
-        if k1 >= 0 && k0 < w.peak.len() as i64 {
-            let v = agg(&w.peak, &w.rms, &w.low, &w.mid, &w.high, k0, k1);
-            wave_col(&mut m, x, step, mid, half, v, rgb_style, if x < cx { 0.62 } else { 1.0 });
-        }
-        c += 1;
-        x += step;
+    let tile_s = TILE as f64 / cps;
+    for k in k0..=k1 {
+        let (s0, s1) = (k as f64 * tile_s, (k + 1) as f64 * tile_s);
+        if s1 < 0.0 || s0 > w.duration + tile_s { continue; }
+        let id = cache.tile(p.ctx(), w, k, cps, hp, rgb_style);
+        let (x0, x1) = (cx + ((s0 - t) * pps) as f32, cx + ((s1 - t) * pps) as f32);
+        // what's played is dimmed: the part left of the playhead drawn tinted
+        let part = |a: f32, b: f32, tint: Color32| {
+            if b <= a { return; }
+            let uv = Rect::from_min_max(pos2((a - x0) / (x1 - x0), 0.0), pos2((b - x0) / (x1 - x0), 1.0));
+            clip.image(id, Rect::from_min_max(pos2(a, rect.top()), pos2(b, rect.bottom())), uv, tint);
+        };
+        part(x0, x1.min(cx), Color32::from_gray(158));
+        part(x0.max(cx), x1, Color32::WHITE);
     }
-    clip.add(m);
     p.rect_filled(Rect::from_min_size(rect.min, vec2(4.0, rect.height())), 0.0, col);
     let xt = |time: f64| cx + ((time - t) * pps) as f32;
     // loop region

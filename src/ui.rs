@@ -28,6 +28,8 @@ pub struct Gui {
     deck_rects: [Rect; DECKS],
     jog_last: [Option<f32>; DECKS],
     lane_drag: [Option<(f32, f32, std::time::Instant, bool, bool)>; DECKS],
+    /// each lane's waveform tiles on the GPU (widgets::WaveCache)
+    lane_cache: [WaveCache; DECKS],
     /// a PAD FX pad held with the mouse (deck, pad)
     pad_held: Option<(usize, usize)>,
     pub frames: u64,
@@ -86,7 +88,7 @@ impl Gui {
         app.midi_io.set_wake(wake.clone());
         app.watch_drives();
         let remote = crate::remote::listen(move || wake());
-        Gui { app, deck_rects: [Rect::NOTHING; DECKS], jog_last: [None; DECKS], lane_drag: [None; DECKS], pad_held: None, frames: 0, test_shot: None,
+        Gui { app, deck_rects: [Rect::NOTHING; DECKS], jog_last: [None; DECKS], lane_drag: [None; DECKS], lane_cache: Default::default(), pad_held: None, frames: 0, test_shot: None,
             rects: Default::default(), uitest: crate::uitest::UiTest::from_env(), heat_open: false, power_open: false, sys: SysStats::new(), battery: (std::time::Instant::now().checked_sub(std::time::Duration::from_secs(60)).unwrap_or_else(std::time::Instant::now), read_battery()), power_confirm: None, bat_alerted: 100, bat_dialog: None, wave_browse: None, last_sel: usize::MAX, heat_paste: String::new(), hitting: false, focus_search: false, keys_open: false, remote, seen_loads: 0, pl_names: (0, Default::default()) }
     }
 
@@ -257,7 +259,7 @@ impl Gui {
         self.reg(format!("lane{i}"), wave);
         let zoom = self.app.store.settings.zoom;
         let rgb = self.app.store.settings.wave_style != "3band";
-        paint_lane(ui.painter(), wave, &self.app.decks[i], i, zoom, rgb);
+        paint_lane(ui.painter(), wave, &self.app.decks[i], i, zoom, rgb, &mut self.lane_cache[i]);
         if let Some(s) = self.side_of(i) {
             let b = Rect::from_min_size(pos2(wave.left() + 8.0, wave.top() + 4.0), vec2(16.0, 14.0));
             ui.painter().rect_filled(b, 3.0, deck_color(i));
