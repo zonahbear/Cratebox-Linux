@@ -49,6 +49,20 @@ pub fn scan() -> Vec<PathBuf> {
 }
 
 /// unmount the drive mounted at `root` and power it off so it can be pulled out; Err says why not
+/// battery-critical and shutdown path: unmount every drive in `roots` on a thread of its own at realtime
+/// priority (below the audio thread's 70, so it isn't stuck behind the UI or analysis), flush what's
+/// still in the page cache, then `systemctl <then>` (poweroff / reboot) if given. `done` gets the errors.
+pub fn eject_all(roots: Vec<PathBuf>, then: Option<&'static str>, done: impl FnOnce(Vec<String>) + Send + 'static) {
+    let _ = std::thread::Builder::new().name("cratebox-eject".into()).spawn(move || {
+        let param = libc::sched_param { sched_priority: 40 };
+        unsafe { libc::pthread_setschedparam(libc::pthread_self(), libc::SCHED_FIFO, &param) };
+        let errs: Vec<String> = roots.iter().filter_map(|r| eject(r).err().map(|e| format!("{}: {e}", r.display()))).collect();
+        let _ = Command::new("sync").status();
+        done(errs);
+        if let Some(arg) = then { let _ = Command::new("systemctl").arg(arg).status(); }
+    });
+}
+
 pub fn eject(root: &Path) -> Result<(), String> {
     let o = Command::new("findmnt").args(["-n", "-o", "SOURCE", "--target"]).arg(root).output().map_err(|e| e.to_string())?;
     let dev = String::from_utf8_lossy(&o.stdout).trim().to_string();

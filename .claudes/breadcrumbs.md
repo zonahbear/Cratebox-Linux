@@ -96,3 +96,4 @@
 - Library PLAYLISTS column (Lists::membership, rebuilt on Lists::fingerprint change). Load Lock: Deck.locked, padlock in the
   deck screen's top corner (paint_lock), LOCK flag. App.loads counter closes the pop-up browser; BROWSE closes on load
   (settings.browse_close_on_load, default on).
+- Battery alerts 5%/3% + power_off (unload, eject on priority thread, systemctl); power icon far right (paint_power).
