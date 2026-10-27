@@ -24,6 +24,8 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 pub enum Job {
+    /// a line for the status bar from a background thread
+    Say(String, f32),
     Scanned { root: PathBuf, tracks: Vec<Track>, quiet: bool },
     Loaded { deck: usize, gen: u64, track: Track, l: Pcm, r: Pcm, sr: f64, ana: DeckAna, mono: (Arc<Vec<f32>>, f64) },
     LoadFailed { deck: usize, gen: u64, msg: String },
@@ -95,6 +97,8 @@ pub struct App {
     pub copying: Option<(u64, u64)>,
     /// when to ask the controller for its knob/fader positions again
     midi_query: Vec<Instant>,
+    /// the FIREFOX box's Downloads folder: when it was last looked at, and its modified time then
+    downloads: (Instant, Option<std::time::SystemTime>),
     pub hp_note: String,
     /// output that stopped and is being reopened: (device name, next attempt)
     reconnect: Option<(String, Instant)>,
@@ -163,7 +167,7 @@ impl App {
             jobs_tx, jobs_rx, queue: VecDeque::new(), analysing: None, analysed_count: 0, deck_loads: Arc::new(AtomicUsize::new(0)),
             midi: midi::Engine::new(), midi_io: MidiIo::new(), last_keep: Instant::now(), last_led: Instant::now(),
             status: String::new(), status_until: Instant::now(), progress: String::new(), outputs, ui: UiState::default(), last_flush: Instant::now(),
-            repaint: None, copying: None, midi_query: vec![], hp_note: String::new(), reconnect: None, scanning: 0,
+            repaint: None, copying: None, midi_query: vec![], downloads: (Instant::now(), None), hp_note: String::new(), reconnect: None, scanning: 0,
         };
         app.midi.use_profile("learn", vec![]);
         app.midi.four = app.store.settings.four;
@@ -229,6 +233,46 @@ impl App {
                 }
             }
             let _ = tx.send(Job::Scanned { root, tracks, quiet });
+            if let Some(w) = wake { w(); }
+        });
+    }
+    /// tracks downloaded with FIREFOX or Nicotine+ (both save to ~/Music/Cratebox Downloads)
+    /// join the collection: the folder becomes a music folder and is rescanned whenever it changes
+    fn watch_downloads(&mut self) {
+        if self.downloads.0.elapsed() < Duration::from_secs(4) || std::env::var_os("CRATEBOX_NO_DRIVES").is_some() { return; }
+        self.downloads.0 = Instant::now();
+        let Some(dir) = downloads_dir() else { return };
+        let Ok(m) = std::fs::metadata(&dir).and_then(|m| m.modified()) else { return };
+        if self.downloads.1 == Some(m) { return; }
+        self.downloads.1 = Some(m);
+        if !self.store.settings.folders.iter().any(|f| f == &dir) { self.store.settings.folders.push(dir.clone()); self.store.dirty_settings = true; }
+        self.scan_folder(&dir, true);
+        self.push_downloads();
+    }
+    /// copy downloads the plugged-in sticks don't have yet into "Cratebox Downloads" on each stick
+    /// (plain files: the stick's rekordbox database is never written); runs again at every plug-in
+    fn push_downloads(&mut self) {
+        let Some(dir) = downloads_dir() else { return };
+        let sticks: Vec<PathBuf> = self.lists.devices.iter().filter(|d| !crate::usbcopy::is_copy(&d.root) && d.root.join("PIONEER").exists()).map(|d| d.root.clone()).collect();
+        if sticks.is_empty() || !dir.is_dir() { return; }
+        let tx = self.jobs_tx.clone();
+        let wake = self.repaint.clone();
+        std::thread::spawn(move || {
+            let files = scan_dir(&dir);
+            for stick in sticks {
+                let to = stick.join("Cratebox Downloads");
+                let mut n = 0;
+                for f in &files {
+                    let Some(name) = f.file_name() else { continue };
+                    let dst = to.join(name);
+                    let size = std::fs::metadata(f).map(|m| m.len()).unwrap_or(0);
+                    if std::fs::metadata(&dst).is_ok_and(|m| m.len() == size) { continue; }
+                    let tmp = to.join(format!(".{}.part", name.to_string_lossy()));
+                    let ok = std::fs::create_dir_all(&to).and_then(|_| std::fs::copy(f, &tmp)).and_then(|_| std::fs::rename(&tmp, &dst));
+                    match ok { Ok(()) => n += 1, Err(e) => { let _ = std::fs::remove_file(&tmp); let _ = tx.send(Job::Say(format!("Couldn't copy a download to the stick: {e}"), 6.0)); break; } }
+                }
+                if n > 0 { let _ = tx.send(Job::Say(format!("Copied {n} download{} to the stick", if n == 1 { "" } else { "s" }), 5.0)); }
+            }
             if let Some(w) = wake { w(); }
         });
     }
@@ -996,6 +1040,7 @@ impl App {
         while self.trash_rx.try_recv().is_ok() {} // finished-with audio buffers get freed here, not on the audio thread
         if let Some(e) = self.audio.take_error() { self.say(&format!("Sound output problem: {e}"), 8.0); }
         self.watch_output();
+        self.watch_downloads();
         if self.midi_query.first().is_some_and(|t| Instant::now() >= *t) {
             self.midi_query.remove(0);
             if let Some(init) = self.midi.profile_info().init { self.midi_io.send(init); }
@@ -1142,6 +1187,7 @@ impl App {
                     self.lists.open.insert(format!("dev:{id}"));
                     self.lists.devices.push(dev);
                     for t in tracks { self.by_id.insert(t.id.clone(), self.tracks.len()); self.tracks.push(t); }
+                    self.push_downloads();
                     if remember && !self.store.settings.devices.contains(&root) { self.store.settings.devices.push(root.clone()); self.store.dirty_settings = true; }
                     self.lists.rematch(&self.tracks);
                     self.apply_view(true);
@@ -1151,6 +1197,7 @@ impl App {
                 }
                 Err(e) => if remember { self.say(&e, 9.0) },
             },
+            Job::Say(m, secs) => self.say(&m, secs),
             Job::Drives(roots) => {
                 // new rekordbox sticks open on their own (a stick replaces its local copy: same device id)
                 for r in &roots {
@@ -1197,3 +1244,6 @@ impl App {
 pub fn level(p: f32) -> f32 { ((20.0 * (p + 1e-9).log10() + 42.0) / 42.0).clamp(0.0, 1.0) }
 
 impl Default for App { fn default() -> Self { App::new() } }
+
+/// where the FIREFOX box and Nicotine+ (Soulseek) save downloads (set up by cratebox-firefox and the kiosk session)
+pub fn downloads_dir() -> Option<PathBuf> { dirs::home_dir().map(|h| h.join("Music/Cratebox Downloads")) }

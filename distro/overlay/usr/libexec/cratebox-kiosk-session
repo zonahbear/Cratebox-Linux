@@ -15,6 +15,12 @@ xset s off -dpms
 rfkill unblock wifi bluetooth 2>/dev/null
 nmcli radio wifi on 2>/dev/null
 bluetoothctl power on >/dev/null 2>&1 &
+# Nicotine+ (Soulseek) saves into ~/Music/Cratebox Downloads, which Cratebox adds to the collection
+# (the FIREFOX button's sandbox saves there too); only once Nicotine+ has written its config
+dl="$HOME/Music/Cratebox Downloads"
+mkdir -p "$dl"
+nc="$HOME/.config/nicotine/config"
+[ -f "$nc" ] && grep -q '^downloaddir *=' "$nc" && sed -i "s|^downloaddir *=.*|downloaddir = $dl|" "$nc"
 openbox --config-file /usr/share/cratebox-os/openbox-rc.xml &
 ob=$!
 cratebox --kiosk

@@ -79,3 +79,8 @@
 ## 2026-10-27 03:30Z
 - Shipped: header FIREFOX (distro/overlay/usr/bin/cratebox-firefox: firejail --private box, first run installs Mozilla-apt firefox + firejail) and FILES (pcmanfm-qt), Wi-Fi/BT forced on in kiosk session + BlueZ AutoEnable in ISO, selected-deck strobe, LIB toggle, HEAT forget-on-auth-fail.
 - Next: HEAT auto-reconnect/longer retries (heat.log shows LE timeouts, bond fine), master+trim readouts, hold SYNC = master, REC arms until play, 3-deck mode, Wi-Fi/BT + net rates in header, PUFF theremin, Soulseek in-app.
+
+## 2026-10-27 03:40Z
+- Downloads: ~/Music/Cratebox Downloads (app.rs downloads_dir) is shared by FIREFOX (firejail --whitelist + Firefox policy DownloadDirectory) and Nicotine+ (kiosk session seds downloaddir). Cratebox rescans it on change and copies new files to "<stick>/Cratebox Downloads" (plain files, pdb untouched; Jonah chose this) now and at each plug-in.
+- HEAT: 5 connect tries (15 s settle), auto-reconnect after a drop at 2/5/10/20/30 s; user Disconnect/Sim cancels.
+- Jonah: in-app Soulseek must scale properly for the 2x display.

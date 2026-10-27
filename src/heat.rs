@@ -501,12 +501,12 @@ mod bluez {
             let is_proxy = { let n = seen.name.to_lowercase(); n.contains("prox") || n.contains("pivot") };
             // the link often drops right after connecting (worst on Proxy), so connect + discovery are retried together
             let mut chars = None;
-            for i in 1..=3u64 {
+            for i in 1..=5u64 {
                 let r: Result<(), String> = (|| {
                     dev.call::<_, _, ()>("Connect", &()).map_err(err)?;
                     let t0 = Instant::now();
                     while !dev.get_property::<bool>("ServicesResolved").unwrap_or(false) {
-                        if t0.elapsed() > Duration::from_secs(10) { return Err("the device didn't answer".into()); }
+                        if t0.elapsed() > Duration::from_secs(15) { return Err("the device didn't answer".into()); }
                         std::thread::sleep(Duration::from_millis(200));
                     }
                     chars = Some(find_chars(&bus, &seen.path)?);
@@ -516,9 +516,9 @@ mod bluez {
                     Ok(()) => break,
                     Err(e) => {
                         let _: Result<(), _> = dev.call("Disconnect", &());
-                        if i == 3 { return Err(connect_hint(&e)); }
-                        say(&format!("Connecting… (try {} of 3: {e})", i + 1));
-                        std::thread::sleep(Duration::from_millis(800 * i));
+                        if i == 5 { return Err(connect_hint(&e)); }
+                        say(&format!("Connecting… (try {} of 5: {e})", i + 1));
+                        std::thread::sleep(Duration::from_millis(1000 * i));
                     }
                 }
             }
@@ -791,7 +791,7 @@ impl Heat {
         let (tx, rx) = channel();
         let (etx, events) = channel();
         let shared = Arc::new(Mutex::new(View { label: "HEAT".into(), dev_text: "No device".into(), ..Default::default() }));
-        let w = Worker { rx, ev: etx, shared: shared.clone(), dev: None, bus: None, scan_until: None, auto: String::new(), phase: Phase::Idle, msg: String::new(),
+        let w = Worker { rx, ev: etx, shared: shared.clone(), dev: None, bus: None, scan_until: None, rejoin: None, last: None, auto: String::new(), phase: Phase::Idle, msg: String::new(),
             live: None, target: None, t: None, end: 0.0, battery: None, drop: 0.0, puff: 0.0, puff_info: String::new(), abort: false, panel: false,
             found: vec![], others: vec![], t0: Instant::now() };
         let _ = std::thread::Builder::new().name("heat".into()).spawn(move || w.main());
@@ -817,7 +817,12 @@ impl Heat {
 
 struct Worker {
     rx: Receiver<Cmd>, ev: Sender<Event>, shared: Arc<Mutex<View>>,
-    dev: Option<Box<dyn Device>>, bus: Option<Arc<bluez::Bus>>, scan_until: Option<Instant>, auto: String,
+    dev: Option<Box<dyn Device>>, bus: Option<Arc<bluez::Bus>>, scan_until: Option<Instant>,
+    /// the Puffco to reconnect to after its link dropped (not after Disconnect): when to try next, tries so far
+    rejoin: Option<(Found, Instant, u32)>,
+    /// the real Puffco connected now (None for the simulator)
+    last: Option<Found>,
+    auto: String,
     phase: Phase, msg: String, live: Option<f64>, target: Option<f64>, t: Option<f64>, end: f64, battery: Option<i64>,
     drop: f64, puff: f64, puff_info: String, abort: bool, panel: bool, found: Vec<Found>, others: Vec<Found>, t0: Instant,
 }
@@ -862,6 +867,16 @@ impl Worker {
                 Err(RecvTimeoutError::Disconnected) => { self.disconnect(); return; }
             }
             if self.scan_until.is_some() { self.scan_tick(); }
+            // a dropped link: try again at 2, 5, 10, 20, 30 s, then give up
+            if self.dev.is_none() && self.rejoin.as_ref().is_some_and(|r| Instant::now() >= r.1) {
+                let (f, _, n) = self.rejoin.take().unwrap();
+                self.say(&format!("Reconnecting to {} (try {} of 5)…", f.name, n + 1));
+                self.pick(f.clone());
+                if self.dev.is_none() {
+                    if n + 1 < 5 { self.rejoin = Some((f, Instant::now() + Duration::from_secs([5, 10, 20, 30][(n as usize).min(3)]), n + 1)); }
+                    else { self.say("Lost the Puffco and couldn't reconnect. Wake it and press connect."); }
+                }
+            }
             // bowl temperature and battery while no curve runs (less often when the panel is closed)
             let every = if self.panel { 1 } else { 3 };
             if self.dev.is_some() && last_idle.elapsed() >= Duration::from_secs(every) {
@@ -883,15 +898,16 @@ impl Worker {
         self.dev = None;
         let _ = self.ev.send(Event::Connected(false));
         if running { self.abort = true; }
-        self.say(if running { "Connection lost mid-curve; the device finishes its own cycle at its last temperature." } else { "Disconnected." });
+        self.say(if running { "Connection lost mid-curve; the device finishes its own cycle at its last temperature. Reconnecting…" } else { "Link dropped. Reconnecting…" });
+        if let Some(f) = self.last.clone() { self.rejoin = Some((f, Instant::now() + Duration::from_secs(2), 0)); }
         false
     }
     fn handle(&mut self, c: Cmd) {
         match c {
             Cmd::Scan(auto) => self.scan(auto),
             Cmd::Pick(f) => self.pick(f),
-            Cmd::Sim => { self.stop_scan(); self.connected(Box::new(SimDevice::new())); }
-            Cmd::Disconnect => self.disconnect(),
+            Cmd::Sim => { self.stop_scan(); self.last = None; self.rejoin = None; self.connected(Box::new(SimDevice::new())); }
+            Cmd::Disconnect => { self.last = None; self.rejoin = None; self.disconnect() }
             Cmd::Run(name, def, model) => self.run(&name, &def, model),
             Cmd::Hold(f, full) => self.hold(f, full),
             Cmd::Stop | Cmd::Hit(_) => { if let (Cmd::Hit(a), Some(d)) = (&c, self.dev.as_mut()) { d.set_airflow(*a); } }
@@ -903,7 +919,7 @@ impl Worker {
         loop {
             match self.rx.try_recv() {
                 Ok(Cmd::Stop) => { self.abort = true; self.say("Stopping…"); }
-                Ok(Cmd::Disconnect) => { self.abort = true; }
+                Ok(Cmd::Disconnect) => { self.abort = true; self.last = None; }
                 Ok(Cmd::Hit(a)) => { if let Some(d) = self.dev.as_mut() { d.set_airflow(a); } }
                 Ok(Cmd::Panel(p)) => self.panel = p,
                 Ok(_) => self.say("Stop the heat run first."),
@@ -916,6 +932,7 @@ impl Worker {
     // ---- connecting ----
     fn scan(&mut self, auto: String) {
         if self.dev.is_some() { return; }
+        self.rejoin = None;
         self.found.clear(); self.others.clear();
         self.auto = auto;
         if self.bus.is_none() {
@@ -959,7 +976,7 @@ impl Worker {
         let shared = self.shared.clone();
         let mut note = |m: &str| { if let Ok(mut v) = shared.lock() { v.msg = m.to_string(); } };
         match bluez::Ble::connect(bus, &seen, &mut note) {
-            Ok(b) => { let _ = self.ev.send(Event::DeviceId(f.addr.clone())); self.connected(Box::new(b)); }
+            Ok(b) => { let _ = self.ev.send(Event::DeviceId(f.addr.clone())); self.last = Some(f.clone()); self.connected(Box::new(b)); }
             Err(e) => self.say(&format!("Couldn't connect: {e}")),
         }
     }
