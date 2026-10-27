@@ -64,7 +64,9 @@ distro/            Cratebox OS ISO: build-iso.sh remasters Lubuntu 26.04.1 (laye
                    in the minimal.standard layer, live-setup.sh in the live layer), overlay/ = files for the
                    installed system, live/ = live-session script. distro/README.md = guide + verified/proposed table.
                    plymouth/make-theme.py draws the boot splash PNGs (committed). Calamares "Minimal" always unpacks
-                   the full layer, then cratebox-minimal-install autoremoves Lubuntu's extras (list made in chroot-setup)
+                   the full layer, then cratebox-minimal-install autoremoves Lubuntu's extras (list made in chroot-setup).
+                   Also: facetimehd DKMS + firmware, maclight (shell, F5/F6), playerctl media keys (openbox-rc.xml),
+                   cratebox-boot-update.service (online at boot → cratebox-update --auto with a saved token)
 .github/workflows/cratebox-app.yml manual-only: app binary → release "app-latest" (overlay/usr/bin/cratebox-update installs it)
 .github/workflows/cratebox-os.yml  manual-only ubuntu job → release "kiosk-latest" (ISO in <2 GiB parts)
 ```
@@ -124,7 +126,7 @@ distro/            Cratebox OS ISO: build-iso.sh remasters Lubuntu 26.04.1 (laye
   app.rs adopt_rb_grid at load). Settings → rekordbox → Compare grids logs bar-1 offsets to grid-compare.log
   (evidence for the "bar 1 half a bar late" report; synthetic tests are all on bar 1, so tuning needs real tracks).
 - rekordbox is read-only here: never writes to a stick (the web app's playlist writer isn't ported).
-- Header launchers: WEB = cratebox-web (Chrome), SOULSEEK = cratebox-soulseek (Nicotine+), FILES = pcmanfm-qt; openbox-rc.xml
+- Header launchers: WEB = cratebox-web (Chromium, xtradeb PPA deb; Chrome only as a fallback on old images), SOULSEEK = cratebox-soulseek (Nicotine+), FILES = pcmanfm-qt; openbox-rc.xml
   gives every window but Cratebox a frame at 80%, resizable. Settings is tabbed (SETTINGS_TABS in ui.rs, one fn per tab).
 - egui closed_line: never repeat the first point at the end (the zero-length segment drew a spike through the globe icon).
 - Binary refuses to run on CPUs without AVX2/FMA/BMI2 and says how to rebuild.

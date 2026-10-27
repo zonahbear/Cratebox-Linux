@@ -1,0 +1,25 @@
+#!/bin/sh
+# maclight: keyboard and screen backlight on Intel MacBooks, the same commands and steps as
+# Tycho Andersen's maclight (github.com/tych0/maclight, MIT; a 2014 Haskell tool, redone here as a
+# few lines of shell so the ISO needn't build a Haskell toolchain):
+#     maclight keyboard|screen up|down|max|off|set=N
+# up/down move by 1/16 of the range. The brightness files are made writable for everyone by
+# /etc/udev/rules.d/90-cratebox-backlight.rules, so no suid. The F5/F6 keys run it (openbox-rc.xml).
+case "$1" in
+    keyboard) dir=/sys/class/leds/smc::kbd_backlight ;;
+    screen) dir=$(ls -d /sys/class/backlight/intel_backlight /sys/class/backlight/* 2>/dev/null | head -n 1) ;;
+    *) echo "usage: maclight keyboard|screen up|down|max|off|set=N" >&2; exit 2 ;;
+esac
+[ -n "$dir" ] && [ -w "$dir/brightness" ] || { echo "maclight: can't write $dir/brightness" >&2; exit 1; }
+max=$(cat "$dir/max_brightness")
+cur=$(cat "$dir/brightness")
+step=$((max / 16)); [ "$step" -gt 0 ] || step=1
+case "$2" in
+    up) new=$((cur + step)); [ "$new" -le "$max" ] || new=$max ;;
+    down) new=$((cur - step)); [ "$new" -ge 0 ] || new=0 ;;
+    max) new=$max ;;
+    off) new=0 ;;
+    set=*) new=${2#set=} ;;
+    *) echo "usage: maclight keyboard|screen up|down|max|off|set=N" >&2; exit 2 ;;
+esac
+echo "$new" > "$dir/brightness"

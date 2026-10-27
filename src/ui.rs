@@ -197,13 +197,13 @@ impl Gui {
                 let r = icon_button(ui, Icon::List, lib, FG()).on_hover_text("Library under the decks: show or hide (hidden: scroll to pop it up)");
                 self.reg("lib", r.rect);
                 if r.clicked() { self.app.store.settings.lib_hidden = lib; self.app.store.dirty_settings = true; }
-                // quick launchers: Chrome (cratebox-web, from os-files), Nicotine+ (cratebox-soulseek) and the file manager
-                let r = icon_button(ui, Icon::Globe, false, FG()).on_hover_text("WEB: Chrome, downloads go straight into the collection");
+                // quick launchers: Chromium (cratebox-web, from os-files), Nicotine+ (cratebox-soulseek) and the file manager
+                let r = icon_button(ui, Icon::Globe, false, FG()).on_hover_text("WEB: Chromium, downloads go straight into the collection");
                 self.reg("web", r.rect);
                 if r.clicked() {
                     // nothing launched: say why (the helper comes with the app update)
                     if let Err(e) = std::process::Command::new("cratebox-web").spawn() {
-                        self.app.say(&format!("Chrome didn't start ({e}). Run Update Cratebox from the Cratebox OS menu to get the helper."), 10.0);
+                        self.app.say(&format!("Chromium didn't start ({e}). Run Update Cratebox from the Cratebox OS menu to get the helper."), 10.0);
                     }
                 }
                 let r = icon_button(ui, Icon::Search, false, FG()).on_hover_text("SOULSEEK: Nicotine+, downloads go straight into the collection");

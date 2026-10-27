@@ -1,0 +1,15 @@
+[Unit]
+Description=Cratebox OS: install a newer Cratebox at boot if online
+After=NetworkManager.service
+Wants=NetworkManager.service
+
+[Service]
+# simple, not oneshot: nothing at boot waits for this
+Type=simple
+ExecStart=/usr/libexec/cratebox-boot-update
+Nice=19
+IOSchedulingClass=idle
+TimeoutStartSec=10min
+
+[Install]
+WantedBy=multi-user.target

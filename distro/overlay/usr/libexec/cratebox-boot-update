@@ -1,0 +1,16 @@
+#!/bin/sh
+# At boot (cratebox-boot-update.service, root, lowest CPU and disk priority): if the machine gets online
+# within a minute, install the newest Cratebox from the app-latest release with the GitHub token a user
+# saved with "Update Cratebox"; offline, or no token yet (the live stick), it does nothing. The new
+# build is used the next time Cratebox starts. Log: /var/log/cratebox-boot-update.log
+exec >>/var/log/cratebox-boot-update.log 2>&1
+echo "--- $(date)"
+i=0
+until [ "$(nmcli -t networking connectivity 2>/dev/null)" = full ]; do
+    i=$((i + 1))
+    [ "$i" -le 30 ] || { echo "offline: skipped"; exit 0; }
+    sleep 2
+done
+tok=$(ls /home/*/.config/cratebox/github-token 2>/dev/null | head -n 1)
+[ -n "$tok" ] || { echo "no GitHub token saved yet: skipped (run Update Cratebox once)"; exit 0; }
+exec /usr/bin/cratebox-update --auto "$tok"

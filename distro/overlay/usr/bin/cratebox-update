@@ -4,7 +4,9 @@ cratebox-app workflow), check its sha256 and that it runs, then replace /usr/bin
 Cratebox OS files from the same release (os-files.tar.gz: session script, 2x scaling, this updater)
 are refreshed with it.
 The repo is private, so it needs a GitHub token with read access to it; asked once, then kept in
-~/.config/cratebox/github-token (mode 600)."""
+~/.config/cratebox/github-token (mode 600).
+`cratebox-update --auto TOKEN_FILE` is the boot check (/usr/libexec/cratebox-boot-update, as root): no
+questions, nothing downloaded when the installed build is already the newest."""
 import getpass, hashlib, json, os, subprocess, sys, tempfile, urllib.request
 
 REPO = "zonahbear/Cratebox-Linux"
@@ -34,21 +36,27 @@ def get(url, tok, accept="application/vnd.github+json"):
         return r.read()
 
 
-def main():
-    tok = token()
+def main(auto=None):
+    tok = open(auto).read().strip() if auto else token()
     try:
         rel = json.loads(get("https://api.github.com/repos/%s/releases/tags/%s" % (REPO, TAG), tok))
     except urllib.error.HTTPError as e:
         if e.code in (401, 403, 404):
+            if auto:
+                sys.exit("GitHub refused the token (or there is no %s release yet)." % TAG)
             os.remove(TOKEN_FILE)
             sys.exit("GitHub refused the token (or there is no %s release yet). Run this again to enter a new one." % TAG)
         raise
     assets = {a["name"]: a["url"] for a in rel["assets"]}
     if "cratebox" not in assets or "cratebox.sha256" not in assets:
         sys.exit("The %s release has no cratebox binary." % TAG)
+    want = get(assets["cratebox.sha256"], tok, "application/octet-stream").split()[0].decode()
+    if auto:
+        with open("/usr/bin/cratebox", "rb") as f:
+            if hashlib.sha256(f.read()).hexdigest() == want:
+                sys.exit("Cratebox is up to date.")
     print("Downloading Cratebox (%s)…" % rel.get("name", TAG))
     data = get(assets["cratebox"], tok, "application/octet-stream")
-    want = get(assets["cratebox.sha256"], tok, "application/octet-stream").split()[0].decode()
     if hashlib.sha256(data).hexdigest() != want:
         sys.exit("Download is damaged (sha256 mismatch). Nothing was changed.")
     with tempfile.NamedTemporaryFile(delete=False, prefix="cratebox-") as f:
@@ -59,9 +67,12 @@ def main():
         sys.exit("The new build doesn't start here: %s Nothing was changed." % new.stderr.strip())
     old = subprocess.run(["/usr/bin/cratebox", "--version"], capture_output=True, text=True).stdout.strip()
     print("Installed: %s\nNew:       %s" % (old or "?", new.stdout.strip()))
-    print("Your password is needed to replace /usr/bin/cratebox.")
-    # Keep the old one as cratebox.previous, so a bad build can be rolled back by hand.
-    subprocess.run(["sudo", "sh", "-c", 'cp -f /usr/bin/cratebox /usr/bin/cratebox.previous && install -m 0755 "$1" /usr/bin/cratebox', "-", f.name], check=True)
+    sudo = [] if os.geteuid() == 0 else ["sudo"]
+    if sudo:
+        print("Your password is needed to replace /usr/bin/cratebox.")
+    # Keep the old one as cratebox.previous, so a bad build can be rolled back by hand. The new one is
+    # renamed into place, so a Cratebox starting meanwhile never finds a half-written file.
+    subprocess.run(sudo + ["sh", "-c", 'cp -f /usr/bin/cratebox /usr/bin/cratebox.previous && install -m 0755 "$1" /usr/bin/cratebox.new && mv -f /usr/bin/cratebox.new /usr/bin/cratebox', "-", f.name], check=True)
     os.remove(f.name)
     if "os-files.tar.gz" in assets and "os-files.tar.gz.sha256" in assets:
         tar = get(assets["os-files.tar.gz"], tok, "application/octet-stream")
@@ -71,7 +82,7 @@ def main():
         else:
             with tempfile.NamedTemporaryFile(delete=False, prefix="cratebox-os-", suffix=".tar.gz") as t:
                 t.write(tar)
-            subprocess.run(["sudo", "tar", "-xzf", t.name, "-C", "/", "--no-overwrite-dir"], check=True)
+            subprocess.run(sudo + ["tar", "-xzf", t.name, "-C", "/", "--no-overwrite-dir"], check=True)
             os.remove(t.name)
             # new window-manager shortcuts apply now (no-op outside the Cratebox session)
             try:
@@ -83,10 +94,12 @@ def main():
 
 
 if __name__ == "__main__":
+    auto = sys.argv[2] if len(sys.argv) > 2 and sys.argv[1] == "--auto" else None
     try:
-        main()
+        main(auto)
     except SystemExit as e:
         print(e)
     except (KeyboardInterrupt, subprocess.CalledProcessError, OSError) as e:
         print("Update stopped: %s" % e)
-    input("\nPress Enter to close.")
+    if not auto:
+        input("\nPress Enter to close.")

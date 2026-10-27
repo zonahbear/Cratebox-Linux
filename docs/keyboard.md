@@ -38,6 +38,10 @@ F12 in the app shows this list. Deck keys follow the controller's sides: the lef
 | F12 | Shortcut list |
 | Esc | Close panels, stop MIDI learn |
 
+On Cratebox OS the MacBook's top row does its printed job without Fn (hold Fn for F1-F4 above): F1/F2 screen
+brightness, F5/F6 keyboard light, F7/F8/F9 previous / play-pause / next in the last media player (Chromium,
+VLC...; not the decks).
+
 Trackpad: knobs drag up/down (Shift = fine); faders grab and slide (they don't jump to the click); two-finger
 scroll nudges knobs and faders, zooms a waveform, and sideways scrubs a paused one; double-click puts a knob,
 the tempo or the crossfader back in the middle. Drag the library's top edge or the line beside the playlists

@@ -2,6 +2,17 @@
 
 Newest first. Each update arrives through `cratebox-update` (no new ISO needed) unless it says "Cratebox OS".
 
+## 27 October 2026 (night): Cratebox OS
+
+- Cratebox OS: Chromium is the browser now (the WEB button opens it), and VLC is installed.
+- Cratebox OS: the MacBook's media keys (rewind, play/pause, forward) control whatever is playing in
+  Chromium, VLC and so on, through playerctl, which starts at login.
+- Cratebox OS: the keyboard light keys (F5/F6) work (maclight), and so do the screen brightness keys.
+- Cratebox OS: FaceTime HD camera driver and its firmware are built in.
+- Cratebox OS: at boot, if Wi-Fi is connected, Cratebox updates itself quietly (once you've run Update
+  Cratebox one time); offline it skips. The new version opens the next time Cratebox starts.
+- Cratebox OS: a bigger boot logo and wordmark, and bigger text on the boot screens.
+
 ## 27 October 2026 (evening)
 
 - SOULSEEK button (magnifying glass) in the header opens Nicotine+, saving straight into the collection.

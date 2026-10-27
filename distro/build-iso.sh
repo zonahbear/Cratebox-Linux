@@ -2,7 +2,7 @@
 # Builds Cratebox OS by remastering the official Lubuntu 26.04 desktop ISO.
 #   sudo distro/build-iso.sh LUBUNTU.iso CRATEBOX_BINARY OUT.iso
 # Needs: squashfs-tools xorriso cpio git curl, root (overlay mounts + chroot), ~25 GB free, network.
-# SKIP_THIRD_PARTY=1 leaves out the out-of-tree speaker driver and Chrome (a quick check of the
+# SKIP_THIRD_PARTY=1 leaves out the out-of-tree drivers and Chromium (a quick check of the
 # remaster itself; that image has no MacBook speakers).
 #
 # The 26.04 ISO is layered: casper/minimal.squashfs, then minimal.standard (the installed desktop),
@@ -126,7 +126,7 @@ cp "$S/etc/plymouth/plymouthd.conf" "$work/splash/etc/plymouth/"
 # boot menu: Cratebox names, 3 s instead of 30 before it boots, and the same kernel options as the
 # installed system
 sed -e 's/^set timeout=30$/set timeout=3/' -e 's/Try or Install Lubuntu/Cratebox OS (try or install)/' -e 's/Lubuntu (safe graphics)/Cratebox OS (safe graphics)/' \
-    -e 's|\(/casper/vmlinuz.*\) ---|\1 mem_sleep_default=s2idle preempt=full threadirqs nowatchdog ---|' "$work/grub.cfg" > "$work/iso/boot/grub/grub.cfg"
+    -e 's|\(/casper/vmlinuz.*\) ---|\1 mem_sleep_default=s2idle preempt=full threadirqs nowatchdog fbcon=font:TER16x32 ---|' "$work/grub.cfg" > "$work/iso/boot/grub/grub.cfg"
 
 echo "== repack"
 changed=(boot/grub/grub.cfg casper/initrd)

@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!-- openbox for the Cratebox kiosk session: Cratebox full screen (it asks for that itself, no frame);
-     Soulseek, Chrome and the file manager open as normal windows over it (title bar, drag to move, drag
+     Soulseek, Chromium and the file manager open as normal windows over it (title bar, drag to move, drag
      an edge to resize, double-click the title to maximise). Alt+Tab switches windows; two ways to close. -->
 <openbox_config xmlns="http://openbox.org/3.4/rc">
   <desktops><number>1</number></desktops>
@@ -19,6 +19,20 @@
     <!-- Command+Shift X / . = bar 1 here on the left / right deck (the app can't see the Command key) -->
     <keybind key="W-S-x"><action name="Execute"><command>cratebox --cmd beat1 left</command></action></keybind>
     <keybind key="W-S-period"><action name="Execute"><command>cratebox --cmd beat1 right</command></action></keybind>
+    <!-- media keys (F7 rewind, F8 play/pause, F9 forward) go to the last media player through playerctl
+         (Chromium, VLC, Nicotine+...; Cratebox's decks are on the controller and the deck keys) -->
+    <keybind key="XF86AudioPlay"><action name="Execute"><command>playerctl play-pause</command></action></keybind>
+    <keybind key="XF86AudioPause"><action name="Execute"><command>playerctl pause</command></action></keybind>
+    <keybind key="XF86AudioStop"><action name="Execute"><command>playerctl stop</command></action></keybind>
+    <keybind key="XF86AudioPrev"><action name="Execute"><command>playerctl previous</command></action></keybind>
+    <keybind key="XF86AudioNext"><action name="Execute"><command>playerctl next</command></action></keybind>
+    <keybind key="XF86AudioRewind"><action name="Execute"><command>playerctl position 10-</command></action></keybind>
+    <keybind key="XF86AudioForward"><action name="Execute"><command>playerctl position 10+</command></action></keybind>
+    <!-- F5/F6 keyboard light, F1/F2 screen brightness (maclight) -->
+    <keybind key="XF86KbdBrightnessUp"><action name="Execute"><command>maclight keyboard up</command></action></keybind>
+    <keybind key="XF86KbdBrightnessDown"><action name="Execute"><command>maclight keyboard down</command></action></keybind>
+    <keybind key="XF86MonBrightnessUp"><action name="Execute"><command>maclight screen up</command></action></keybind>
+    <keybind key="XF86MonBrightnessDown"><action name="Execute"><command>maclight screen down</command></action></keybind>
   </keyboard>
   <mouse>
     <dragThreshold>3</dragThreshold>

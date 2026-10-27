@@ -2,8 +2,9 @@
 
 A Lubuntu 26.04 LTS live/install ISO that boots straight into Cratebox, full screen. Audio comes
 first, and it is built for the 12-inch MacBook (model A1534, MacBook10,1 / 2017; MacBook9,1 should
-behave the same). It also runs on other x86-64-v3 PCs. **Nicotine+** (Soulseek), **Google Chrome** and
-the **Claude desktop app** (Anthropic's official Linux beta) are on it too. It boots with a Cratebox
+behave the same). It also runs on other x86-64-v3 PCs. **Nicotine+** (Soulseek), **Chromium**, **VLC** and
+the **Claude desktop app** (Anthropic's official Linux beta) are on it too, plus the FaceTime HD camera
+driver, `maclight` for the keyboard light and `playerctl` for the media keys. It boots with a Cratebox
 splash.
 
 The MacBook settings come from what was tested on Jonah's MacBook10,1 (Lubuntu 26.04, kernel
@@ -42,7 +43,7 @@ From Linux there is an untested fallback:
 ## Using it
 
 - **Boot:** straight into Cratebox, full screen (`cratebox --kiosk` under a bare openbox, with no panel).
-- **Desktop (Soulseek, Chrome, Wi-Fi):** quit Cratebox (its **OFF** menu → *Exit to login screen*, **Alt+F4**
+- **Desktop (Soulseek, Chromium, Wi-Fi):** quit Cratebox (its **OFF** menu → *Exit to login screen*, **Alt+F4**
   or **Ctrl+Alt+Q**) and the login screen comes back: pick the *Lubuntu* session there. On the live stick
   quitting opens the normal "Try / Install" desktop instead. OFF → *Shut down* turns the computer off.
 - **Install:** from the desktop, choose Install. **Normal** or **Minimal** both give you everything
@@ -56,7 +57,13 @@ From Linux there is an untested fallback:
   release (GitHub → Actions → **cratebox-app**, a few minutes), checks it and replaces
   `/usr/bin/cratebox` (the old one stays as `cratebox.previous`). The repo is private, so the first
   run asks for a GitHub fine-grained token with read access to it; it is kept in
-  `~/.config/cratebox/github-token`. No new ISO needed for app changes.
+  `~/.config/cratebox/github-token`. No new ISO needed for app changes. After that first run, every
+  boot checks too (`cratebox-boot-update.service`, lowest priority): if the machine is online within a
+  minute it installs a newer build, used from the next Cratebox start; offline it does nothing. Log:
+  `/var/log/cratebox-boot-update.log`.
+- **Keys** (MacBook top row, without Fn): F1/F2 screen brightness and F5/F6 keyboard light (`maclight
+  keyboard up|down|max|off|set=N`, a shell redo of tych0/maclight), F7/F8/F9 previous/play-pause/next
+  for the last media player (`playerctl`, with `playerctld` started at login). Hold Fn for F1-F12.
 - **Boot menu:** the stick waits 3 s on its menu; the installed system doesn't show one (hold **Esc**
   at power-on to get it, e.g. for an older kernel).
 - **Sleep:** s2idle only (see below). Closing the lid is fine, but shut down before a long stretch
@@ -82,14 +89,14 @@ From Linux there is an untested fallback:
 |---|---|
 | Cratebox's audio thread runs **realtime** (SCHED_FIFO 70, under PipeWire's own threads). Login users join the `cratebox-rt` group at boot, which `/etc/security/limits.d/30-cratebox-rt.conf` allows rtprio 70. No CPU time limit is set, so an overloaded moment can stutter but can't kill Cratebox | Otherwise a busy UI or analysis thread could delay it. PipeWire's own setup is untouched |
 | Cratebox buffer **512 frames** for new users (about 10 ms per period at 48 kHz). Settings → Sound changes it | The default 256 is tight for a 4.5 W fanless Core m |
-| PipeWire `default.clock.min-quantum = 256` | Stops apps such as Chrome pulling the graph below 5 ms |
+| PipeWire `default.clock.min-quantum = 256` | Stops apps such as Chromium pulling the graph below 5 ms |
 | `preempt=full` | The generic kernel is PREEMPT_DYNAMIC; full preemption gives the audio threads steadier scheduling |
 | **performance** power profile while Cratebox is open, restored when it closes. thermald stays on | The CPU ramps up fast for load bursts. HDA power saving is left exactly as stock (brief rule) |
 | Kiosk session runs openbox only, with no panel, compositor or applets; screen blanking is off | Less running next to the audio |
-| No snapd, Firefox snap or LibreOffice; Chrome is the one browser | Lighter |
+| No snapd, Firefox snap or LibreOffice; Chromium is the one browser (deb from the xtradeb PPA, pinned to Chromium only, since Ubuntu's is a snap) | Lighter |
 | `threadirqs` (interrupt handlers as threads, as Ubuntu Studio does) and `nowatchdog` | IRQ work can be scheduled around the audio threads; no NMI watchdog ticking |
 | No automatic apt runs (`apt-daily*` timers off), no CUPS, ModemManager, kerneloops, whoopsie or apport | Nothing kicks off in the background mid-set. Update by hand: `sudo apt update && sudo apt upgrade` |
-| Intel VA-API driver (`intel-media-va-driver-non-free`) | Chrome and Claude decode video on the GPU, not the 4.5 W CPU (less heat, less throttling) |
+| Intel VA-API driver (`intel-media-va-driver-non-free`) | Chromium, VLC and Claude decode video on the GPU, not the 4.5 W CPU (less heat, less throttling) |
 | zram swap (half the RAM, zstd), swappiness left at the default | Memory pressure swaps to RAM, not the SSD. A higher swappiness would page out decoded tracks |
 
 **Faster boot** (proposed): the stick's boot menu waits 3 s instead of 30; the installed system's
@@ -118,14 +125,17 @@ Then play through the speakers after a **warm reboot** and after a **cold boot**
 
 ## Not done
 
-- FaceTime HD camera driver and hibernation are left out, to keep this scoped.
+- Hibernation is left out, to keep this scoped.
+- FaceTime HD camera: patjak/facetimehd (DKMS) and facetimehd-firmware 5.60.0 (cut from Apple's
+  macOS 10.12.6 update at build time), pinned commits. guvcview showed a picture on the MacBook with a
+  hand-built copy; browsers not yet checked.
 - Not done for boot time: a host-only or lz4 initramfs. It would load faster, but a wrong host-only
   guess leaves the machine unbootable, so it waits for a timed boot on the MacBook first.
 - Kept on purpose: CPU vulnerability mitigations (turning them off is faster on Kaby Lake but not
   safe on a machine that browses), and the i915 GuC/HuC firmware defaults.
 - MacBook8,1 (2015) isn't supported by the speaker driver.
-- The ISO contains Chrome and the Claude desktop app, whose licences don't allow passing them around, so
-  keep the release private.
+- The ISO contains the Claude desktop app and Apple's camera firmware, whose licences don't allow
+  passing them around, so keep the release private.
 
 ## Updating the kernel later
 
