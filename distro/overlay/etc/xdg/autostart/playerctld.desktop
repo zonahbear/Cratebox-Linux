@@ -1,0 +1,6 @@
+[Desktop Entry]
+Type=Application
+Name=playerctld
+Comment=Keeps track of the last media player, so the play/pause, previous and next keys reach it
+Exec=playerctld daemon
+NoDisplay=true

@@ -15,8 +15,11 @@ xset s off -dpms
 rfkill unblock wifi bluetooth 2>/dev/null
 nmcli radio wifi on 2>/dev/null
 bluetoothctl power on >/dev/null 2>&1 &
+# playerctld: remembers the last media player, so the play/pause, previous and next keys (playerctl in
+# openbox-rc.xml) reach it (the Lubuntu desktop starts it from /etc/xdg/autostart)
+command -v playerctld >/dev/null && { pgrep -u "$(id -u)" -x playerctld >/dev/null || playerctld daemon; }
 # Nicotine+ (Soulseek) saves into ~/Music/Cratebox Downloads, which Cratebox adds to the collection
-# (the WEB button's Chrome saves there too); only once Nicotine+ has written its config
+# (the WEB button's Chromium saves there too); only once Nicotine+ has written its config
 dl="$HOME/Music/Cratebox Downloads"
 mkdir -p "$dl"
 nc="$HOME/.config/nicotine/config"

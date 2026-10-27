@@ -252,7 +252,7 @@ impl App {
             if let Some(w) = wake { w(); }
         });
     }
-    /// tracks downloaded with WEB (Chrome) or Nicotine+ (both save to ~/Music/Cratebox Downloads)
+    /// tracks downloaded with WEB (Chromium) or Nicotine+ (both save to ~/Music/Cratebox Downloads)
     /// join the collection: the folder becomes a music folder and is rescanned whenever it changes
     fn watch_downloads(&mut self) {
         if self.downloads.0.elapsed() < Duration::from_secs(4) || std::env::var_os("CRATEBOX_NO_DRIVES").is_some() { return; }
@@ -1416,5 +1416,5 @@ fn grid_compare_line(t: &Track, rb: f64, rf: f64) -> Option<i64> {
     Some(beats)
 }
 
-/// where the WEB button (Chrome) and Nicotine+ (Soulseek) save downloads (set up by cratebox-web and the kiosk session)
+/// where the WEB button (Chromium) and Nicotine+ (Soulseek) save downloads (set up by cratebox-web and the kiosk session)
 pub fn downloads_dir() -> Option<PathBuf> { dirs::home_dir().map(|h| h.join("Music/Cratebox Downloads")) }

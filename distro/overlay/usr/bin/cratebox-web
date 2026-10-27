@@ -1,7 +1,7 @@
 #!/bin/sh
-# WEB button: Chrome (already on Cratebox OS) in its own profile, so it opens fast and saves straight to
+# WEB button: Chromium (already on Cratebox OS) in its own profile, so it opens fast and saves straight to
 # ~/Music/Cratebox Downloads, which Cratebox adds to the collection (and copies to a plugged-in stick).
-# Chrome's own sandbox isolates pages; it runs niced so a busy page can't take CPU from the audio.
+# Chromium's own sandbox isolates pages; it runs niced so a busy page can't take CPU from the audio.
 DATA="$HOME/.local/share/cratebox"
 PROFILE="$DATA/web"
 DL="$HOME/Music/Cratebox Downloads"
@@ -15,12 +15,13 @@ if [ ! -f "$PROFILE/Default/Preferences" ]; then
     printf '{"download":{"default_directory":"%s","prompt_for_download":false,"directory_upgrade":true},"savefile":{"default_directory":"%s"},"browser":{"has_seen_welcome_page":true}}\n' \
         "$dl_json" "$dl_json" > "$PROFILE/Default/Preferences"
 fi
-for b in google-chrome-stable google-chrome chromium chromium-browser; do
+# Chromium first; Chrome only on Cratebox OS images from before the switch
+for b in chromium google-chrome-stable google-chrome; do
     if command -v "$b" >/dev/null; then
         echo "starting: $b"
         exec nice -n 10 "$b" --user-data-dir="$PROFILE" --no-first-run --no-default-browser-check \
             --disable-session-crashed-bubble --hide-crash-restore-bubble --new-window "$@"
     fi
 done
-echo "no Chrome or Chromium found"
+echo "no Chromium (or Chrome) found"
 exit 1

@@ -11,7 +11,7 @@ DISC = (20, 23, 28)
 BLUE = (57, 167, 255)
 ORANGE = (255, 138, 61)
 FG = (230, 236, 243)
-SIZE, SS, FRAMES = 200, 4, 60
+SIZE, SS, FRAMES = 320, 4, 60
 here = os.path.dirname(os.path.abspath(__file__))
 fonts = os.path.join(here, "..", "..", "assets", "fonts")
 
@@ -32,10 +32,10 @@ def wheel(angle):
     return im.resize((SIZE, SIZE), Image.LANCZOS)
 
 def wordmark():
-    f = ImageFont.truetype(os.path.join(fonts, "Inter-Bold.otf"), 26 * SS)
+    f = ImageFont.truetype(os.path.join(fonts, "Inter-Bold.otf"), 52 * SS)
     a, b = "CRATE", "BOX"
     wa, wb = f.getlength(a), f.getlength(b)
-    h = 34 * SS
+    h = 68 * SS
     im = Image.new("RGBA", (int(wa + wb) + 4 * SS, h), (0, 0, 0, 0))
     d = ImageDraw.Draw(im)
     d.text((2 * SS, h / 2), a, font=f, fill=FG, anchor="lm")

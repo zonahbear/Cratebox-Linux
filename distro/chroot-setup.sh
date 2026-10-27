@@ -13,6 +13,25 @@ cdrom=/etc/apt/sources.list.d/cdrom.sources
 if [ -e "$cdrom" ]; then mv "$cdrom" "$src/"; trap 'mv "$src/cdrom.sources" "$cdrom"' EXIT; fi
 apt-get update
 
+# Chromium (the one browser), first so a missing package fails the build in seconds rather than after
+# the driver builds. Ubuntu's own chromium is a snap (and snapd is purged below), so it's the deb from
+# the xtradeb PPA, pinned so that PPA only supplies Chromium and nothing that Ubuntu has.
+if [ -z "${SKIP_THIRD_PARTY:-}" ]; then
+    key=/etc/apt/keyrings/xtradeb.gpg
+    install -d -m 0755 /etc/apt/keyrings
+    curl -fsSL 'https://keyserver.ubuntu.com/pks/lookup?op=get&search=0x5301FA4FD93244FBC6F6149982BB6851C64F6880' \
+        | gpg --dearmor -o "$key"
+    gpg --show-keys --with-colons "$key" | grep -q '^fpr:::::::::5301FA4FD93244FBC6F6149982BB6851C64F6880:$' \
+        || { echo "xtradeb signing key has the wrong fingerprint" >&2; exit 1; }
+    echo "deb [arch=amd64 signed-by=$key] https://ppa.launchpadcontent.net/xtradeb/apps/ubuntu $(. /etc/os-release; echo "$VERSION_CODENAME") main" \
+        > /etc/apt/sources.list.d/xtradeb-apps.list
+    printf 'Package: *\nPin: release o=LP-PPA-xtradeb-apps\nPin-Priority: 100\n\nPackage: chromium*\nPin: release o=LP-PPA-xtradeb-apps\nPin-Priority: 700\n' \
+        > /etc/apt/preferences.d/xtradeb-chromium
+    apt-get update
+    apt_get install chromium
+    command -v chromium >/dev/null
+fi
+
 # Kernel: keep exactly the one the ISO ships (7.0.0-30, the kernel the speaker driver was verified
 # on) and hold it, so an update can't swap the kernel under the out-of-tree driver before a gig
 kver=$(ls /lib/modules)
@@ -32,18 +51,30 @@ if [ -z "${SKIP_THIRD_PARTY:-}" ]; then
     dkms add -m macbook12-audio-driver -v 0.1
     dkms install -m macbook12-audio-driver -v 0.1 -k "$kver"
     modinfo -k "$kver" -n snd_hda_codec_cs420x | grep -q /updates/
+
+    # FaceTime HD camera (PCIe 14e4:1570): patjak/facetimehd via DKMS, plus its firmware, which
+    # facetimehd-firmware cuts out of Apple's macOS 10.12.6 update (byte ranges from Apple's CDN);
+    # firmware 5.60.0 covers the 12-inch MacBook and brings the sensor colour files. Pinned commits.
+    apt_get install --no-install-recommends git curl xz-utils make
+    rm -rf /tmp/fthd /tmp/fthd-fw
+    git clone -q https://github.com/patjak/facetimehd /tmp/fthd
+    git -C /tmp/fthd checkout -q 6dc8cd85e87993ff21cb01eb333ff42afb058551
+    git clone -q https://github.com/patjak/facetimehd-firmware /tmp/fthd-fw
+    git -C /tmp/fthd-fw checkout -q 60ee21228d9ca00a7bd84fdaefaff00a81f1db91
+    make -C /tmp/fthd-fw
+    make -C /tmp/fthd-fw install
+    [ -s /usr/lib/firmware/facetimehd/firmware.bin ] || [ -s /lib/firmware/facetimehd/firmware.bin ]
+    fver=$(sed -n 's/^PACKAGE_VERSION=//p' /tmp/fthd/dkms.conf)
+    rm -rf "/usr/src/facetimehd-$fver"
+    cp -a /tmp/fthd "/usr/src/facetimehd-$fver"
+    rm -rf "/usr/src/facetimehd-$fver/.git" /tmp/fthd /tmp/fthd-fw
+    dkms add -m facetimehd -v "$fver"
+    dkms install -m facetimehd -v "$fver" -k "$kver"
+    modinfo -k "$kver" -n facetimehd >/dev/null
 fi
 
-# Apps: Nicotine+ (Soulseek), Google Chrome (the one browser), and what the kiosk session uses
-apt_get install nicotine openbox x11-xserver-utils alsa-utils power-profiles-daemon
-if [ -z "${SKIP_THIRD_PARTY:-}" ]; then
-    install -d -m 0755 /etc/apt/keyrings
-    curl -fsSL https://dl.google.com/linux/linux_signing_key.pub | gpg --dearmor -o /etc/apt/keyrings/google-chrome.gpg
-    echo "deb [arch=amd64 signed-by=/etc/apt/keyrings/google-chrome.gpg] https://dl.google.com/linux/chrome/deb/ stable main" \
-        > /etc/apt/sources.list.d/google-chrome.list
-    apt-get update
-    apt_get install google-chrome-stable
-fi
+# Apps: Nicotine+ (Soulseek), VLC, playerctl (media keys), and what the kiosk session uses
+apt_get install nicotine vlc playerctl openbox x11-xserver-utils alsa-utils power-profiles-daemon
 
 # Claude desktop (official Linux beta, Anthropic's apt repo; https://code.claude.com/docs/en/desktop-linux).
 # Its recommends are QEMU/OVMF/virtiofsd for Cowork's VM; gnome-keyring keeps the sign-in.
@@ -58,11 +89,11 @@ if [ -z "${SKIP_THIRD_PARTY:-}" ]; then
     apt_get install claude-desktop gnome-keyring
 fi
 
-# Kaby Lake (HD 615): hardware video decode, so Chrome and Claude don't decode video on the 4.5 W CPU;
+# Kaby Lake (HD 615): hardware video decode, so Chromium, VLC and Claude don't decode video on the 4.5 W CPU;
 # zram swap (config in overlay/etc/systemd/zram-generator.conf)
 apt_get install intel-media-va-driver-non-free systemd-zram-generator
 
-# Lighter: no snapd / Firefox snap (Chrome is the browser), no office suite on a DJ machine
+# Lighter: no snapd / Firefox snap (Chromium is the browser), no office suite on a DJ machine
 apt-mark manual pipewire pipewire-pulse wireplumber rtkit
 apt_get purge snapd firefox $(dpkg-query -W -f '${Package}\n' | grep '^libreoffice')
 apt_get autoremove --purge
@@ -74,7 +105,7 @@ install -Dm 0644 "$src/cratebox.png" /usr/share/icons/hicolor/512x512/apps/crate
 gtk-update-icon-cache -q /usr/share/icons/hicolor || true
 cp -a "$src"/overlay/. /
 groupadd -r -f cratebox-rt
-systemctl enable macbook12-audio-amps.service cratebox-rt-users.service
+systemctl enable macbook12-audio-amps.service cratebox-rt-users.service cratebox-boot-update.service
 
 # Boot splash: the Cratebox theme (overlay/usr/share/plymouth/themes/cratebox) plus the stock
 # password/keyboard images two-step needs. The installer's dracut run puts it in the initramfs;
@@ -87,6 +118,10 @@ for f in bullet capslock entry keyboard keymap-render lock; do
 done
 update-alternatives --install /usr/share/plymouth/themes/default.plymouth default.plymouth "$theme/cratebox.plymouth" 300
 update-alternatives --set default.plymouth "$theme/cratebox.plymouth"
+
+# Console text (fsck, the disk password, a text login) in the big Terminus font, like the kernel's
+# fbcon=font:TER16x32 (overlay/etc/default/grub.d/90-cratebox.cfg)
+sed -i 's/^FONTFACE=.*/FONTFACE="Terminus"/; s/^FONTSIZE=.*/FONTSIZE="16x32"/' /etc/default/console-setup
 
 # Bluetooth for HEAT (Puffco over BLE): a Puffco that dropped its bond pairs again without a prompt
 conf=/etc/bluetooth/main.conf
@@ -114,9 +149,9 @@ done
 
 # "Minimal installation" (cratebox-minimal-install): the stock full-minus-minimal packages, without
 # the ones Cratebox OS itself uses. Those are also marked manual, so autoremove keeps what they need.
-keep="nicotine openbox x11-xserver-utils alsa-utils power-profiles-daemon pipewire pipewire-pulse pipewire-alsa
+keep="nicotine vlc playerctl openbox x11-xserver-utils alsa-utils power-profiles-daemon pipewire pipewire-pulse pipewire-alsa
       wireplumber rtkit dkms build-essential intel-media-va-driver-non-free systemd-zram-generator plymouth
-      google-chrome-stable claude-desktop gnome-keyring bluez"
+      chromium claude-desktop gnome-keyring bluez"
 for lib in $(ldd /usr/bin/cratebox | awk '$3 ~ /^\// { print $3 }') \
            libxkbcommon-x11.so.0 libxkbcommon.so.0 libEGL.so.1 libGL.so.1 libGLX.so.0 libX11-xcb.so.1 \
            libXcursor.so.1 libXi.so.6 libXrandr.so.2 libwayland-client.so.0 libwayland-egl.so.1 libwayland-cursor.so.0; do

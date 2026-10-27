@@ -4,8 +4,8 @@ Description=Cratebox OS boot splash: the jog wheel turning, CRATEBOX at the bott
 ModuleName=two-step
 
 [two-step]
-Font=Sans 12
-TitleFont=Sans 30
+Font=Sans 20
+TitleFont=Sans 48
 ImageDir=/usr/share/plymouth/themes/cratebox
 DialogHorizontalAlignment=.5
 DialogVerticalAlignment=.7
@@ -14,7 +14,7 @@ TitleVerticalAlignment=.382
 HorizontalAlignment=.5
 VerticalAlignment=.5
 WatermarkHorizontalAlignment=.5
-WatermarkVerticalAlignment=.92
+WatermarkVerticalAlignment=.88
 Transition=none
 TransitionDuration=0.0
 BackgroundStartColor=0x0b0d10
