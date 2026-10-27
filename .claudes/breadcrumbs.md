@@ -92,3 +92,4 @@
   load closes manager, load lock, battery 5%/3%, graceful shutdown, power icon, themes, Puffco LED), then Soulseek.
 - Beat 1: ⌘⇧X / ⌘⇧. via openbox keybinds → `cratebox --cmd beat1 left|right` (src/remote.rs socket). Ctrl+Shift fallback.
   openbox-rc.xml now ships in os-files; cratebox-update runs `openbox --reconfigure`.
+- Library: BPM / KEY / MATCH quick-sort chips next to search (SortKey::Match, library::match_score, App::mix_ref); key highlight: same key bright, neighbours softer.

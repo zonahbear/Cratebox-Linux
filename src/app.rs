@@ -350,7 +350,15 @@ impl App {
             }
         }
     }
+    /// the deck to mix into: the one that started playing last, else the first loaded one (key now, tempo)
+    pub fn mix_ref(&self) -> (Option<crate::keys::Camelot>, f64) {
+        let mut p: Vec<&crate::deck::Deck> = self.decks.iter().filter(|d| d.playing && d.loaded()).collect();
+        p.sort_by_key(|d| std::cmp::Reverse(d.started_at));
+        let d = p.first().copied().or_else(|| self.decks.iter().take(self.deck_count()).find(|d| d.loaded()));
+        d.map(|d| (crate::keys::camelot(d.key_now()), d.eff_bpm())).unwrap_or((None, 0.0))
+    }
     pub fn apply_view(&mut self, keep_sel: bool) {
+        self.list.mix_ref = self.mix_ref();
         let base = self.view_tracks();
         self.list.apply(base, keep_sel);
     }
