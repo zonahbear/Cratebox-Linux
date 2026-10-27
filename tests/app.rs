@@ -86,7 +86,7 @@ fn whole_app() {
     assert!((app.decks[0].rate() - 1.0).abs() < 0.001);
 
     // ---- SYNC: deck 2 (140) follows deck 1 (126), beats line up once it plays
-    midi(&mut app, &[0x91, 0x58, 0x7f]);
+    midi(&mut app, &[0x91, 0x58, 0x7f]); midi(&mut app, &[0x91, 0x58, 0x00]); // a tap: SYNC on release
     assert!(app.decks[1].sync && (app.decks[1].eff_bpm() - 126.0).abs() < 0.01, "sync: {}", app.decks[1].eff_bpm());
     midi(&mut app, &[0x91, 0x0b, 0x7f]);
     run(&mut app, 1.0);
@@ -98,6 +98,16 @@ fn whole_app() {
     app.poll();
     assert!((app.decks[1].eff_bpm() - app.decks[0].eff_bpm()).abs() < 0.01);
     midi(&mut app, &[0xb0, 0x00, 0x40]); midi(&mut app, &[0xb0, 0x20, 0x00]);
+    // ---- holding SYNC makes deck 2 the master: deck 1, synced, then follows it
+    midi(&mut app, &[0x91, 0x58, 0x7f]);
+    std::thread::sleep(cratebox::app::HOLD_MASTER + std::time::Duration::from_millis(50));
+    app.poll();
+    midi(&mut app, &[0x91, 0x58, 0x00]);
+    assert!(app.decks[1].sync, "a hold doesn't toggle SYNC off");
+    app.set_sync(0, true);
+    app.poll();
+    assert_eq!(app.tempo_master(), Some(1), "deck 2 is the master");
+    app.set_sync(0, false);
 
     // ---- hot cue A on deck 1 (set, then jump back to it)
     midi(&mut app, &[0x97, 0x00, 0x7f]);

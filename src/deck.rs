@@ -343,19 +343,34 @@ impl Deck {
             self.sync_rate = 1.0 + self.pitch * self.range() / 100.0; // with nothing to follow: stay at the fader's tempo
             match m {
                 None => self.say("Load a track on another deck to sync to".into()),
-                Some(m) => {
-                    let r = m.eff_bpm / self.bpm();
-                    self.sync_mult = Self::pick_mult(r);
-                    self.sync_rate = (r * self.sync_mult).clamp(0.5, 2.0);
-                    self.sync_trim = 0.0;
-                    self.send_rate();
-                    if self.playing && m.playing { self.align_phase(m); }
-                    if self.sync_mult != 1.0 {
-                        self.say(format!("Deck {} synced at {} time: {:.2} against {:.2}", self.i + 1, if self.sync_mult < 1.0 { "half" } else { "double" }, self.bpm() * self.sync_rate, m.eff_bpm));
-                    }
-                }
+                Some(m) => self.follow(m),
             }
         } else { self.sync_trim = 0.0; self.phase_err = None; }
+        self.send_rate();
+    }
+    /// lock onto `m`'s tempo (and phase, if both play)
+    fn follow(&mut self, m: Peer) {
+        self.sync_with = Some(m.i); self.sync_track = m.gen; self.has_master = true;
+        let r = m.eff_bpm / self.bpm();
+        self.sync_mult = Self::pick_mult(r);
+        self.sync_rate = (r * self.sync_mult).clamp(0.5, 2.0);
+        self.sync_trim = 0.0;
+        self.send_rate();
+        if self.playing && m.playing { self.align_phase(m); }
+        if self.sync_mult != 1.0 {
+            self.say(format!("Deck {} synced at {} time: {:.2} against {:.2}", self.i + 1, if self.sync_mult < 1.0 { "half" } else { "double" }, self.bpm() * self.sync_rate, m.eff_bpm));
+        }
+    }
+    /// SYNC held on another deck made `m` the master: a synced deck follows it from now on
+    pub fn follow_master(&mut self, m: Peer) {
+        if !self.sync || m.i == self.i || !self.loaded() || self.bpm() <= 0.0 || m.bpm <= 0.0 { return; }
+        self.sync_since = Instant::now();
+        self.follow(m);
+    }
+    /// SYNC held here: this deck leads at its current tempo (it stays synced, following nobody)
+    pub fn become_master(&mut self) {
+        self.sync_with = None; self.has_master = false; self.sync_trim = 0.0; self.phase_err = None;
+        self.sync_since = Instant::now().checked_sub(std::time::Duration::from_secs(86400)).unwrap_or(self.sync_since.min(Instant::now())); // older than every other sync: never follows them
         self.send_rate();
     }
     pub fn align_phase(&mut self, m: Peer) {

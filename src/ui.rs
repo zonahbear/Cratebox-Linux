@@ -120,7 +120,7 @@ impl Gui {
             pill(ui, &format!("{out} · {ch} ch"), self.app.audio.running() && ch >= 4).on_hover_text(&self.app.hp_note);
             ui.add_space(4.0);
             let st = self.app.status_text().to_string();
-            let right_w = 470.0 + 40.0 + 130.0 + 110.0 + if self.battery.1.is_some() { 130.0 } else { 0.0 };
+            let right_w = 470.0 + 40.0 + 130.0 + 110.0 + 40.0 + if self.battery.1.is_some() { 130.0 } else { 0.0 };
             ui.add_sized(vec2((ui.available_width() - right_w).max(40.0), 20.0), egui::Label::new(egui::RichText::new(st).color(MUTED).size(11.5)).truncate());
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                 let lv = [level(self.app.status_snap.master_meter[0]), level(self.app.status_snap.master_meter[1])];
@@ -130,6 +130,7 @@ impl Gui {
                 let frozen = self.app.learning();
                 let r = knob(ui, &mut m, "", FG, 0.8, 22.0, frozen);
                 if !self.learn(ui, &r, "master", -1) && r.changed() { self.app.mixer.master = m; self.app.send_mixer(); }
+                ui.label(egui::RichText::new(db_text(crate::engine::master_level_gain(self.app.mixer.master as f64))).font(mono(10.0)).color(FG));
                 ui.label(egui::RichText::new("MASTER").size(9.5).color(MUTED));
                 ui.add_space(6.0);
                 let r = button(ui, "OFF", vec2(34.0, 22.0), self.power_open, RED, 11.0).on_hover_text("Exit to the login screen, restart or shut down");
@@ -167,8 +168,11 @@ impl Gui {
                     let _ = std::process::Command::new("pcmanfm-qt").arg(&home).spawn().or_else(|_| std::process::Command::new("xdg-open").arg(&home).spawn());
                 }
                 let rec = self.app.rec.as_ref().map(|r| r.seconds());
-                let label = match rec { Some(s) => format!("● {}:{:02}", s as u64 / 60, s as u64 % 60), None => "● REC".into() };
-                let r = button(ui, &label, vec2(62.0, 22.0), rec.is_some(), RED, 11.5).on_hover_text("Record the master to a WAV file (Settings → Sound says where)");
+                let armed = self.app.rec_armed;
+                let label = match rec { Some(s) => format!("● {}:{:02}", s as u64 / 60, s as u64 % 60), None if armed => "● ARMED".into(), None => "● REC".into() };
+                if armed { ui.ctx().request_repaint_after(std::time::Duration::from_millis(100)); }
+                let lit = rec.is_some() || (armed && (ui.ctx().input(|i| i.time) * 2.0).fract() < 0.5);
+                let r = button(ui, &label, vec2(62.0, 22.0), lit, RED, 11.5).on_hover_text("Record the master to a WAV file (Settings → Sound says where)");
                 self.reg("rec", r.rect);
                 if r.clicked() { self.app.toggle_rec(); }
                 // battery, left of REC: red "PLUG IN SOON" at 20 %, blinking "PLUG IN NOW" at 10 % (on battery only)
@@ -379,8 +383,8 @@ impl Gui {
             let d = &self.app.decks[i];
             let (sync, mt, q, g) = (d.sync, d.mt, d.quant, self.app.ui.grid_open[i]);
             let u = (w - 5.0 * GAP) / 6.4;
-            let r = button(ui, "SYNC", vec2(u * 1.4, rh), sync, col, font);
-            if !self.learn(ui, &r, "sync", i as i8) && r.clicked() { self.app.set_sync(i, !sync); }
+            let r = button(ui, "SYNC", vec2(u * 1.4, rh), sync, col, font).on_hover_text("Sync to the master. Right-click (or hold SYNC on the controller): make this deck the master");
+            if !self.learn(ui, &r, "sync", i as i8) { if r.clicked() { self.app.set_sync(i, !sync); } else if r.secondary_clicked() { self.app.make_master(i); } }
             let r = button(ui, "MT", vec2(u, rh), mt, col, font).on_hover_text("Master tempo (keylock): change tempo without changing the key");
             if !self.learn(ui, &r, "keylock", i as i8) && r.clicked() { self.app.set_mt(i, !mt); }
             let r = button(ui, "Q", vec2(u, rh), q, col, font).on_hover_text("Quantize: snap cues and loops to the beat grid");
@@ -561,8 +565,8 @@ impl Gui {
             let d = &self.app.decks[i];
             let (sync, mt, q, grid_open) = (d.sync, d.mt, d.quant, self.app.ui.grid_open[i]);
             let u = (w - 4.0 * GAP) / 5.4;
-            let r = button(ui, "SYNC", vec2(u * 1.4, rh), sync, col, font);
-            if !self.learn(ui, &r, "sync", i as i8) && r.clicked() { self.app.set_sync(i, !sync); }
+            let r = button(ui, "SYNC", vec2(u * 1.4, rh), sync, col, font).on_hover_text("Sync to the master. Right-click (or hold SYNC on the controller): make this deck the master");
+            if !self.learn(ui, &r, "sync", i as i8) { if r.clicked() { self.app.set_sync(i, !sync); } else if r.secondary_clicked() { self.app.make_master(i); } }
             let r = button(ui, "MT", vec2(u, rh), mt, col, font).on_hover_text("Master tempo (keylock)");
             if !self.learn(ui, &r, "keylock", i as i8) && r.clicked() { self.app.set_mt(i, !mt); }
             let r = button(ui, "Q", vec2(u, rh), q, col, font).on_hover_text("Quantize");
@@ -768,7 +772,14 @@ impl Gui {
             let kx = sr.center().x - kw / 2.0;
             for (q, (label, key)) in names.iter().enumerate() {
                 let y = tab_r.bottom() + 2.0 + q as f32 * kh;
-                ui.painter().text(pos2(kx + 24.0, y + kh / 2.0), egui::Align2::RIGHT_CENTER, *label, prop(8.5), MUTED);
+                if *key == "trim" {
+                    // TRIM with its gain in dB under it
+                    let g = crate::mixer::trim_gain(self.app.mixer.trim[i] as f64);
+                    ui.painter().text(pos2(kx + 24.0, y + kh / 2.0 - 4.5), egui::Align2::RIGHT_CENTER, *label, prop(8.5), MUTED);
+                    ui.painter().text(pos2(kx + 24.0, y + kh / 2.0 + 5.0), egui::Align2::RIGHT_CENTER, db_text(g), mono(8.0), FG);
+                } else {
+                    ui.painter().text(pos2(kx + 24.0, y + kh / 2.0), egui::Align2::RIGHT_CENTER, *label, prop(8.5), MUTED);
+                }
                 let kr = Rect::from_min_size(pos2(kx + 26.0, y + (kh - ks - 4.0) / 2.0), vec2(ks + 8.0, ks + 4.0));
                 let ui = &mut ui.new_child(UiBuilder::new().max_rect(kr).layout(Layout::top_down(Align::Center)));
                 let m = &self.app.mixer;
@@ -1983,3 +1994,6 @@ fn phase_tag(d: &crate::deck::Deck) -> Option<(String, Color32)> {
     let c = if pe.abs() < 0.006 { Color32::from_rgb(0x3d, 0xdc, 0x84) } else if pe.abs() < 0.02 { Color32::from_rgb(0xff, 0xb0, 0x20) } else { Color32::from_rgb(0xff, 0x3b, 0x55) };
     Some((format!("{}{} ms", if pe >= 0.0 { "+" } else { "−" }, (pe.abs() * 1000.0 + 0.5).floor() as i64), c))
 }
+
+/// a gain as a dB readout: "+1.6", "-12.0", "-∞"
+fn db_text(g: f64) -> String { if g <= 1e-4 { "-∞".into() } else { format!("{:+.1}", 20.0 * g.log10()) } }
