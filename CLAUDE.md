@@ -30,6 +30,8 @@ src/fft.rs keys.rs FFT, Camelot keys
 src/decode.rs      symphonia → planar f32 + tags
 src/library.rs     folder scan, tags, analysis cache, search/sort
 src/playlists.rs   playlists + folders, rekordbox USB (read-only), rekordbox XML import/export
+src/usbcopy.rs     stick → ~/Music/Cratebox USB/<name> local (copy/update, never deletes); a copy keeps the
+                   stick's device id so the two are one device; library scans skip "Cratebox USB"
 src/rekordbox.rs   export.pdb + ANLZ readers, XML (crate-digger layouts)
 src/midi.rs        controller profiles, table-driven MIDI engine, LEDs, MIDI learn
 src/maps.rs        GENERATED from the web app's MIXXX_MAPS; don't hand-edit (regenerate instead)

@@ -1,6 +1,8 @@
 #!/usr/bin/python3
 """Update Cratebox: download the newest app from the "app-latest" GitHub release (built by the
-cratebox-app workflow), check its sha256 and that it runs, then replace /usr/bin/cratebox.
+cratebox-app workflow), check its sha256 and that it runs, then replace /usr/bin/cratebox. Small
+Cratebox OS files from the same release (os-files.tar.gz: session script, 2x scaling, this updater)
+are refreshed with it.
 The repo is private, so it needs a GitHub token with read access to it; asked once, then kept in
 ~/.config/cratebox/github-token (mode 600)."""
 import getpass, hashlib, json, os, subprocess, sys, tempfile, urllib.request
@@ -61,6 +63,17 @@ def main():
     # Keep the old one as cratebox.previous, so a bad build can be rolled back by hand.
     subprocess.run(["sudo", "sh", "-c", 'cp -f /usr/bin/cratebox /usr/bin/cratebox.previous && install -m 0755 "$1" /usr/bin/cratebox', "-", f.name], check=True)
     os.remove(f.name)
+    if "os-files.tar.gz" in assets and "os-files.tar.gz.sha256" in assets:
+        tar = get(assets["os-files.tar.gz"], tok, "application/octet-stream")
+        want = get(assets["os-files.tar.gz.sha256"], tok, "application/octet-stream").split()[0].decode()
+        if hashlib.sha256(tar).hexdigest() != want:
+            print("Cratebox OS files: download damaged, skipped.")
+        else:
+            with tempfile.NamedTemporaryFile(delete=False, prefix="cratebox-os-", suffix=".tar.gz") as t:
+                t.write(tar)
+            subprocess.run(["sudo", "tar", "-xzf", t.name, "-C", "/", "--no-overwrite-dir"], check=True)
+            os.remove(t.name)
+            print("Cratebox OS files updated (session, scaling, updater): they apply from the next login.")
     print("Done. Restart Cratebox to use the new version.")
 
 

@@ -36,6 +36,9 @@ pub struct Gui {
     pub rects: std::collections::HashMap<String, Rect>,
     pub uitest: Option<crate::uitest::UiTest>,
     heat_open: bool,
+    /// the OFF menu (exit to the login screen, restart, shut down) and the action waiting for its confirm
+    power_open: bool,
+    power_confirm: Option<&'static str>,
     /// HEAT panel: the paste box, and the simulator's "hold to hit" being held
     heat_paste: String,
     hitting: bool,
@@ -66,7 +69,7 @@ impl Gui {
         app.repaint = Some(wake.clone());
         app.midi_io.set_wake(wake);
         Gui { app, deck_rects: [Rect::NOTHING; DECKS], jog_last: [None; DECKS], lane_drag: [None; DECKS], pad_held: None, frames: 0, test_shot: None,
-            rects: Default::default(), uitest: crate::uitest::UiTest::from_env(), heat_open: false, heat_paste: String::new(), hitting: false, focus_search: false, keys_open: false }
+            rects: Default::default(), uitest: crate::uitest::UiTest::from_env(), heat_open: false, power_open: false, power_confirm: None, heat_paste: String::new(), hitting: false, focus_search: false, keys_open: false }
     }
 
     /// in learn mode a click on a mappable control picks it; returns true if it was used up that way
@@ -115,6 +118,9 @@ impl Gui {
                 if !self.learn(ui, &r, "master", -1) && r.changed() { self.app.mixer.master = m; self.app.send_mixer(); }
                 ui.label(egui::RichText::new("MASTER").size(9.5).color(MUTED));
                 ui.add_space(6.0);
+                let r = button(ui, "OFF", vec2(34.0, 22.0), self.power_open, RED, 11.0).on_hover_text("Exit to the login screen, restart or shut down");
+                self.reg("power", r.rect);
+                if r.clicked() { self.power_open = !self.power_open; self.power_confirm = None; }
                 let r = button(ui, "⚙", vec2(26.0, 22.0), self.app.ui.settings_open, deck_color(0), 13.0).on_hover_text("Settings");
                 self.reg("settings", r.rect);
                 if r.clicked() { self.app.ui.settings_open = !self.app.ui.settings_open; }
@@ -238,6 +244,7 @@ impl Gui {
             for (on, txt, c) in [(d.mt, "MT", col), (master, "MASTER", CUE), (d.sync, "SYNC", col)] {
                 if on { put(&mut x, &p, txt.to_string(), bold(fs - 3.0), c, 5.0); }
             }
+            if let Some((txt, c)) = phase_tag(d) { put(&mut x, &p, txt, mono(fs - 2.0), c, 6.0); }
             if d.ana.is_some() {
                 let beat = d.beat_at(t).floor().rem_euclid(4.0) as i32;
                 x -= 3.0;
@@ -430,10 +437,11 @@ impl Gui {
         let tempo = format!("{:+.2}% {}", (d.rate() - 1.0) * 100.0, if rg == 100.0 { "W".into() } else { format!("±{rg}") });
         p.text(pos2(c2, y2), egui::Align2::RIGHT_TOP, tempo, mono(small), if d.pitch.abs() < 1e-6 { MUTED } else { FG });
         let master = self.app.tempo_master() == Some(i);
-        let flags: Vec<(&str, Color32)> = [(master, "MASTER", CUE), (d.sync, "SYNC", col), (d.mt, "MT", col)].into_iter().filter(|f| f.0).map(|f| (f.1, f.2)).collect();
+        let mut flags: Vec<(String, Color32)> = [(master, "MASTER", CUE), (d.sync, "SYNC", col), (d.mt, "MT", col)].into_iter().filter(|f| f.0).map(|f| (f.1.to_string(), f.2)).collect();
+        if let Some(t) = phase_tag(d) { flags.insert(flags.len().min(2), t); }
         let mut fx = c1 + cw / 2.0 - flags.iter().map(|f| f.0.len() as f32 * small * 0.62 + 6.0).sum::<f32>() / 2.0;
         for (s, c) in flags {
-            let g = p.layout_no_wrap(s.to_string(), bold(small - 1.0), c);
+            let g = p.layout_no_wrap(s, bold(small - 1.0), c);
             let gw = g.size().x;
             p.galley(pos2(fx, y2), g, c);
             fx += gw + 6.0;
@@ -951,6 +959,14 @@ impl Gui {
                 // row actions on hover: × delete / ⏏ close / ⧉ copy
                 let xr = Rect::from_min_size(pos2(rect.right() - 24.0, rect.top()), vec2(20.0, rect.height()));
                 let hovering_x = resp.hover_pos().is_some_and(|hp| xr.contains(hp));
+                // ↓ on a stick: copy it to this computer (or update that copy)
+                let stick_row = r.kind == RowKind::Dev && self.app.lists.devices.iter().any(|d| d.id == r.dev && !crate::usbcopy::is_copy(&d.root));
+                let cr = xr.translate(vec2(-22.0, 0.0));
+                let hovering_c = stick_row && resp.hover_pos().is_some_and(|hp| cr.contains(hp));
+                if stick_row && (resp.hovered() || is_view) {
+                    p.text(cr.center(), egui::Align2::CENTER_CENTER, "↓", prop(14.0), if hovering_c { FG } else { MUTED });
+                    if hovering_c { resp.clone().on_hover_text("Copy to this computer / update the copy"); }
+                }
                 if resp.hovered() || is_view {
                     let sym = match r.kind { RowKind::Pl | RowKind::Folder | RowKind::Dev => "×", RowKind::DevPl => "+", _ => "" };
                     if !sym.is_empty() { p.text(xr.center(), egui::Align2::CENTER_CENTER, sym, prop(14.0), if hovering_x { FG } else { MUTED }); }
@@ -959,7 +975,8 @@ impl Gui {
                     self.app.tree_sel = k;
                     self.app.focus_tree = false;
                     let on_caret = resp.interact_pointer_pos().is_some_and(|hp| caret_rect.contains(hp));
-                    if hovering_x {
+                    if hovering_c { let d = r.dev.clone(); self.app.copy_device(&d); }
+                    else if hovering_x {
                         match r.kind {
                             RowKind::Pl | RowKind::Folder => self.app.ui.confirm_delete = Some(r.id.clone()),
                             RowKind::Dev => { let d = r.dev.clone(); self.app.close_device(&d); }
@@ -1328,11 +1345,12 @@ impl Gui {
                 Key::ArrowRight if m.shift => { let d = self.app.midi.side[1]; self.app.load_selected(d); }
                 Key::Enter => { let d = self.load_target(); self.app.load_selected(d); }
                 Key::Delete | Key::Backspace => if matches!(self.app.view, View::Pl(_)) { self.app.remove_from_playlist(); },
-                Key::Escape => { if self.app.learning() { self.app.stop_learn(); } self.app.ui.settings_open = false; self.heat_open = false; self.keys_open = false; }
+                Key::Escape => { if self.app.learning() { self.app.stop_learn(); } self.app.ui.settings_open = false; self.heat_open = false; self.keys_open = false; self.power_open = false; }
                 Key::F1 => { let w = &mut self.app.store.settings.wave; *w = !*w; self.app.store.dirty_settings = true; }
                 Key::F2 => { let f = self.app.four(); self.app.set_four(!f); }
                 Key::F3 => { let b = &mut self.app.store.settings.browse; *b = !*b; self.app.store.dirty_settings = true; }
                 Key::F4 => self.heat_open = !self.heat_open,
+                Key::F11 => { let fs = ctx.input(|i| i.viewport().fullscreen.unwrap_or(false)); ctx.send_viewport_cmd(egui::ViewportCommand::Fullscreen(!fs)); }
                 Key::F12 => self.keys_open = !self.keys_open,
                 Key::Backtick => { if let Some(a) = self.app.midi.toggle_side(0) { self.app.midi_action(a); } }
                 Key::Backslash => { if let Some(a) = self.app.midi.toggle_side(1) { self.app.midi_action(a); } }
@@ -1418,6 +1436,43 @@ impl Gui {
     }
     /// TrueCurve mini: device, curve, Start; HOLD for PUFF. Once something starts the panel closes and the
     /// HEAT button carries the bowl temperature.
+    /// OFF: leave the Cratebox session (back to the login screen on Cratebox OS), restart or shut down.
+    /// Restart and shut down ask once more, so a stray tap can't end a set; they go through logind
+    /// (systemctl), which lets the logged-in user do it without a password.
+    fn power_menu(&mut self, ctx: &egui::Context) {
+        let anchor = self.rects.get("power").map(|r| pos2(r.right(), r.bottom() + 6.0)).unwrap_or(pos2(1100.0, 40.0));
+        let mut open = true;
+        egui::Window::new("Power").open(&mut open).collapsible(false).resizable(false).title_bar(false)
+            .fixed_pos(pos2(anchor.x - 220.0, anchor.y)).fixed_size(vec2(220.0, 0.0)).show(ctx, |ui| {
+            ui.spacing_mut().item_spacing = vec2(6.0, 6.0);
+            let playing = self.app.decks.iter().any(|d| d.playing);
+            if playing { ui.label(egui::RichText::new("A deck is playing.").size(11.0).color(CUE)); }
+            let w = vec2(ui.available_width(), 28.0);
+            if let Some(what) = self.power_confirm {
+                ui.label(egui::RichText::new(format!("{what} now?")).size(13.0).color(FG));
+                ui.horizontal(|ui| {
+                    let half = vec2((w.x - 6.0) / 2.0, 28.0);
+                    if button(ui, what, half, true, RED, 12.0).clicked() {
+                        let arg = if what == "Shut down" { "poweroff" } else { "reboot" };
+                        match std::process::Command::new("systemctl").arg(arg).spawn() {
+                            Ok(_) => self.app.say(&format!("{what}…"), 10.0),
+                            Err(e) => self.app.say(&format!("Couldn't {}: {e}", what.to_lowercase()), 8.0),
+                        }
+                        self.power_open = false;
+                    }
+                    if button(ui, "Cancel", half, false, FG, 12.0).clicked() { self.power_confirm = None; }
+                });
+                return;
+            }
+            if button(ui, "Exit to login screen", w, false, FG, 12.0).on_hover_text("Quit Cratebox (same as Alt+F4)").clicked() {
+                ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+            }
+            if button(ui, "Restart", w, false, FG, 12.0).clicked() { self.power_confirm = Some("Restart"); }
+            if button(ui, "Shut down", w, false, RED, 12.0).clicked() { self.power_confirm = Some("Shut down"); }
+        });
+        if !open { self.power_open = false; }
+    }
+
     fn heat_panel(&mut self, ctx: &egui::Context) {
         let mut open = self.heat_open;
         let anchor = self.rects.get("heat").map(|r| pos2(r.right(), r.bottom() + 6.0)).unwrap_or(pos2(900.0, 40.0));
@@ -1610,6 +1665,7 @@ pub const SHORTCUTS: &[(&str, &str)] = &[
     ("F3", "BROWSE (big library)"),
     ("F4", "HEAT panel"),
     ("Ctrl R", "REC on / off"),
+    ("F11", "Full screen on/off"),
     ("F12", "This list"),
     ("Esc", "Close panels, stop MIDI learn"),
     ("", "Trackpad"),
@@ -1715,6 +1771,7 @@ impl eframe::App for Gui {
             self.library(ui);
         });
         if self.app.ui.settings_open { self.settings(ctx); }
+        if self.power_open { self.power_menu(ctx); }
         if self.heat_open { self.heat_panel(ctx); } else { self.app.heat.set_panel(false); }
         if self.keys_open { self.keys_window(ctx); }
         self.dialogs(ctx);
@@ -1743,4 +1800,12 @@ fn save_png(path: &PathBuf, img: &egui::ColorImage) {
     e.set_color(png::ColorType::Rgba);
     e.set_depth(png::BitDepth::Eight);
     if let Ok(mut w) = e.write_header() { let _ = w.write_image_data(img.as_raw()); }
+}
+
+/// beat lock: how far a synced deck's beats are from the master's, as on the web and iOS apps
+/// ("+3 ms"): green within 6 ms, amber within 20, red beyond
+fn phase_tag(d: &crate::deck::Deck) -> Option<(String, Color32)> {
+    let pe = if d.sync { d.phase_err? } else { return None };
+    let c = if pe.abs() < 0.006 { Color32::from_rgb(0x3d, 0xdc, 0x84) } else if pe.abs() < 0.02 { Color32::from_rgb(0xff, 0xb0, 0x20) } else { Color32::from_rgb(0xff, 0x3b, 0x55) };
+    Some((format!("{}{} ms", if pe >= 0.0 { "+" } else { "−" }, (pe.abs() * 1000.0 + 0.5).floor() as i64), c))
 }

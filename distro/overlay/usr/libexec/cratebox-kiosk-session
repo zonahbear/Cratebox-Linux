@@ -1,15 +1,10 @@
 #!/bin/sh
 # Cratebox kiosk session: Cratebox full screen under a bare openbox (no panel, no compositor).
-# When Cratebox quits (Alt+F4 or Ctrl+Alt+Q), the desktop given as arguments starts in the same
-# session: LXQt on an installed system, the live installer on the ISO.
+# When Cratebox quits (Alt+F4, Ctrl+Alt+Q or its exit button), the session ends and the login screen
+# comes back (pick Lubuntu there for the desktop). On the live ISO, the live desktop given as arguments
+# starts instead, since there is no login screen to go back to.
 
-# 12-inch MacBook panel is 2304x1440 at 226 ppi: draw everything at 2x (Cratebox then has
-# 1152x720 points, just above its 1100x720 minimum). Other screens keep their own scale.
-w=$(xrandr --current 2>/dev/null | sed -n 's/.* connected.* \([0-9]\{1,\}\)x[0-9]\{1,\}+0+0.*/\1/p' | head -n1)
-if [ "${w:-0}" -ge 2000 ]; then
-    echo "Xft.dpi: 192" | xrdb -merge
-    export GDK_SCALE=2 GDK_DPI_SCALE=0.5
-fi
+# 2x on the MacBook's panel comes from /etc/X11/Xsession.d/45cratebox-hidpi (every session gets it).
 
 # While Cratebox runs: the CPU's performance profile (fast reaction to load bursts, so the audio
 # callback isn't waiting on clock ramp-up; thermald still guards the fanless chip) and no blanking
@@ -23,5 +18,5 @@ kill "$ob" 2>/dev/null
 wait "$ob" 2>/dev/null
 xset s on +dpms
 [ -n "$was" ] && powerprofilesctl set "$was" 2>/dev/null
-[ $# -gt 0 ] || set -- /usr/bin/startlxqt
-exec "$@"
+[ $# -gt 0 ] && exec "$@"
+exit 0

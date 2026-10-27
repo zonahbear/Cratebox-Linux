@@ -196,7 +196,7 @@ pub fn scan_dir(root: &Path) -> Vec<PathBuf> {
             let name = e.file_name();
             if name.to_string_lossy().starts_with('.') { continue; }
             let Ok(ft) = e.file_type() else { continue };
-            if ft.is_dir() { stack.push(p); } else if is_audio(&p) { out.push(p); }
+            if ft.is_dir() { if name != "Cratebox USB" { stack.push(p); } } else if is_audio(&p) { out.push(p); }
         }
     }
     out
