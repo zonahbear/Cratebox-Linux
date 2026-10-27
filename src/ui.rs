@@ -1341,6 +1341,7 @@ impl Gui {
                 Key::F2 => { let f = self.app.four(); self.app.set_four(!f); }
                 Key::F3 => { let b = &mut self.app.store.settings.browse; *b = !*b; self.app.store.dirty_settings = true; }
                 Key::F4 => self.heat_open = !self.heat_open,
+                Key::F11 => { let fs = ctx.input(|i| i.viewport().fullscreen.unwrap_or(false)); ctx.send_viewport_cmd(egui::ViewportCommand::Fullscreen(!fs)); }
                 Key::F12 => self.keys_open = !self.keys_open,
                 Key::Backtick => { if let Some(a) = self.app.midi.toggle_side(0) { self.app.midi_action(a); } }
                 Key::Backslash => { if let Some(a) = self.app.midi.toggle_side(1) { self.app.midi_action(a); } }
@@ -1655,6 +1656,7 @@ pub const SHORTCUTS: &[(&str, &str)] = &[
     ("F3", "BROWSE (big library)"),
     ("F4", "HEAT panel"),
     ("Ctrl R", "REC on / off"),
+    ("F11", "Full screen on/off"),
     ("F12", "This list"),
     ("Esc", "Close panels, stop MIDI learn"),
     ("", "Trackpad"),
