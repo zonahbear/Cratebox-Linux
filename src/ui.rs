@@ -38,6 +38,8 @@ pub struct Gui {
     heat_open: bool,
     /// the OFF menu (exit to the login screen, restart, shut down) and the action waiting for its confirm
     power_open: bool,
+    /// last battery read (every 15 s): percent, charging
+    battery: (std::time::Instant, Option<(u32, bool)>),
     /// WAVE mode: the pop-up library (opened by scrolling, last activity) and the selection it last saw
     wave_browse: Option<std::time::Instant>,
     last_sel: usize,
@@ -73,7 +75,7 @@ impl Gui {
         app.midi_io.set_wake(wake);
         app.watch_drives();
         Gui { app, deck_rects: [Rect::NOTHING; DECKS], jog_last: [None; DECKS], lane_drag: [None; DECKS], pad_held: None, frames: 0, test_shot: None,
-            rects: Default::default(), uitest: crate::uitest::UiTest::from_env(), heat_open: false, power_open: false, power_confirm: None, wave_browse: None, last_sel: usize::MAX, heat_paste: String::new(), hitting: false, focus_search: false, keys_open: false }
+            rects: Default::default(), uitest: crate::uitest::UiTest::from_env(), heat_open: false, power_open: false, battery: (std::time::Instant::now(), read_battery()), power_confirm: None, wave_browse: None, last_sel: usize::MAX, heat_paste: String::new(), hitting: false, focus_search: false, keys_open: false }
     }
 
     /// in learn mode a click on a mappable control picks it; returns true if it was used up that way
@@ -110,7 +112,7 @@ impl Gui {
             pill(ui, &format!("{out} · {ch} ch"), self.app.audio.running() && ch >= 4).on_hover_text(&self.app.hp_note);
             ui.add_space(4.0);
             let st = self.app.status_text().to_string();
-            let right_w = 470.0;
+            let right_w = 470.0 + if self.battery.1.is_some() { 120.0 } else { 0.0 };
             ui.add_sized(vec2((ui.available_width() - right_w).max(40.0), 20.0), egui::Label::new(egui::RichText::new(st).color(MUTED).size(11.5)).truncate());
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                 let lv = [level(self.app.status_snap.master_meter[0]), level(self.app.status_snap.master_meter[1])];
@@ -147,6 +149,20 @@ impl Gui {
                 let r = button(ui, &label, vec2(62.0, 22.0), rec.is_some(), RED, 11.5).on_hover_text("Record the master to a WAV file (Settings → Sound says where)");
                 self.reg("rec", r.rect);
                 if r.clicked() { self.app.toggle_rec(); }
+                // battery, left of REC: red "PLUG IN SOON" at 20 %, blinking "PLUG IN NOW" at 10 % (on battery only)
+                if self.battery.0.elapsed().as_secs() >= 15 { self.battery = (std::time::Instant::now(), read_battery()); }
+                if let Some((pc, charging)) = self.battery.1 {
+                    let (txt, c) = if charging { (format!("AC {pc}%"), MUTED) }
+                        else if pc <= 10 { (format!("PLUG IN NOW {pc}%"), RED) }
+                        else if pc <= 20 { (format!("PLUG IN SOON {pc}%"), RED) }
+                        else { (format!("{pc}%"), MUTED) };
+                    let blink = !charging && pc <= 10;
+                    let t = ui.ctx().input(|i| i.time);
+                    if blink { ui.ctx().request_repaint_after(std::time::Duration::from_millis(100)); }
+                    let c = if blink && (t * 2.0).fract() > 0.5 { Color32::from_rgba_unmultiplied(c.r(), c.g(), c.b(), 40) } else { c };
+                    ui.add_space(4.0);
+                    ui.label(egui::RichText::new(txt).font(bold(11.5)).color(c)).on_hover_text(if charging { "Charging" } else { "On battery" });
+                }
             });
         });
     }
@@ -1708,6 +1724,18 @@ impl Gui {
 
 /// a deck key: (controller side, Some(pad) for a pad key). Left hand plays the left side (deck 1, or 3 in
 /// 4-deck mode after a layer switch), right hand the right side.
+/// the laptop battery from /sys/class/power_supply: (percent, charging or full on AC); None on a desktop
+fn read_battery() -> Option<(u32, bool)> {
+    for e in std::fs::read_dir("/sys/class/power_supply").ok()?.flatten() {
+        let p = e.path();
+        if std::fs::read_to_string(p.join("type")).map(|t| t.trim() == "Battery").unwrap_or(false) {
+            let pc = std::fs::read_to_string(p.join("capacity")).ok()?.trim().parse().ok()?;
+            let st = std::fs::read_to_string(p.join("status")).unwrap_or_default();
+            return Some((pc, matches!(st.trim(), "Charging" | "Full" | "Not charging")));
+        }
+    }
+    None
+}
 fn deck_key(k: Key) -> Option<(usize, Option<usize>)> {
     use Key::*;
     let left = [Num1, Num2, Num3, Num4, Q, W, E, R];
