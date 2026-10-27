@@ -174,10 +174,15 @@ impl Gui {
                 let r = button(ui, "LIB", vec2(36.0, 22.0), lib, FG, 11.5).on_hover_text("Show or close the library under the decks (closed: scroll to pop it up)");
                 self.reg("lib", r.rect);
                 if r.clicked() { self.app.store.settings.lib_hidden = lib; self.app.store.dirty_settings = true; }
-                // quick launchers: sandboxed Firefox (cratebox-firefox, from os-files) and the file manager
-                let r = button(ui, "FIREFOX", vec2(58.0, 22.0), false, FG, 11.5).on_hover_text("Firefox in a sandbox (its own home, can't see your files)");
-                self.reg("firefox", r.rect);
-                if r.clicked() { let _ = std::process::Command::new("cratebox-firefox").spawn().or_else(|_| std::process::Command::new("firefox").spawn()); }
+                // quick launchers: Chrome (cratebox-web, from os-files) and the file manager
+                let r = button(ui, "WEB", vec2(40.0, 22.0), false, FG, 11.5).on_hover_text("Chrome, saving downloads into the collection");
+                self.reg("web", r.rect);
+                if r.clicked() {
+                    // nothing launched: say why (the helper comes with the app update)
+                    if let Err(e) = std::process::Command::new("cratebox-web").spawn() {
+                        self.app.say(&format!("Chrome didn't start ({e}). Run Update Cratebox from the Cratebox OS menu to get the helper."), 10.0);
+                    }
+                }
                 let r = button(ui, "FILES", vec2(44.0, 22.0), false, FG, 11.5).on_hover_text("Open the file manager");
                 self.reg("files", r.rect);
                 if r.clicked() {

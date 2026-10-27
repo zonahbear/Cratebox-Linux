@@ -84,3 +84,9 @@
 - Downloads: ~/Music/Cratebox Downloads (app.rs downloads_dir) is shared by FIREFOX (firejail --whitelist + Firefox policy DownloadDirectory) and Nicotine+ (kiosk session seds downloaddir). Cratebox rescans it on change and copies new files to "<stick>/Cratebox Downloads" (plain files, pdb untouched; Jonah chose this) now and at each plug-in.
 - HEAT: 5 connect tries (15 s settle), auto-reconnect after a drop at 2/5/10/20/30 s; user Disconnect/Sim cancels.
 - Jonah: in-app Soulseek must scale properly for the 2x display.
+
+## 2026-10-27 WEB button
+- FIREFOX → WEB: spawns distro/overlay/usr/bin/cratebox-web (Chrome, own profile ~/.local/share/cratebox/web,
+  downloads → ~/Music/Cratebox Downloads, niced, log web.log). cratebox-firefox/firejail removed (too slow mid-set).
+- Next: spec list (Beat 1 shortcuts Cmd+Shift+X / Cmd+Shift+., Camelot colours + quick sort, playlist column,
+  load closes manager, load lock, battery 5%/3%, graceful shutdown, power icon, themes, Puffco LED), then Soulseek.
