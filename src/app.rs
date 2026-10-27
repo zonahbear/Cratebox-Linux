@@ -58,6 +58,8 @@ pub struct UiState {
 }
 
 pub struct App {
+    /// tracks loaded so far (the pop-up browser closes when this moves)
+    pub loads: u64,
     pub tx: Sender<Cmd>,
     pub shared: Shared,
     pub status_snap: Status,
@@ -175,7 +177,7 @@ impl App {
             jobs_tx, jobs_rx, queue: VecDeque::new(), analysing: None, analysed_count: 0, deck_loads: Arc::new(AtomicUsize::new(0)),
             midi: midi::Engine::new(), midi_io: MidiIo::new(), last_keep: Instant::now(), last_led: Instant::now(),
             status: String::new(), status_until: Instant::now(), progress: String::new(), outputs, ui: UiState::default(), last_flush: Instant::now(),
-            repaint: None, copying: None, midi_query: vec![], rec_armed: false, sync_held: [None; DECKS], downloads: (Instant::now(), None), hp_note: String::new(), reconnect: None, scanning: 0,
+            repaint: None, copying: None, midi_query: vec![], rec_armed: false, loads: 0, sync_held: [None; DECKS], downloads: (Instant::now(), None), hp_note: String::new(), reconnect: None, scanning: 0,
         };
         app.midi.use_profile("learn", vec![]);
         app.midi.four = app.store.settings.four;
@@ -390,6 +392,9 @@ impl App {
         if t.missing { self.say(&format!("\"{}\" isn't in a connected folder or device right now", t.title), 5.0); return; }
         let t = self.track(&t.id).cloned().unwrap_or(t);
         let gen = match self.decks[i].begin_load(t.clone()) { Ok(g) => g, Err(e) => { self.say(&e, 4.0); return; } };
+        // a track picked: back to the decks (the pop-up browser watches `loads` too)
+        self.loads += 1;
+        if self.store.settings.browse && self.store.settings.browse_close_on_load { self.store.settings.browse = false; self.store.dirty_settings = true; }
         self.say(&format!("Loading {} into deck {}…", t.title, i + 1), 0.0);
         let tx = self.jobs_tx.clone();
         let sr = self.audio.sr;

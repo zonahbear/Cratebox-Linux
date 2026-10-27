@@ -53,6 +53,10 @@ pub struct Gui {
     keys_open: bool,
     /// `cratebox --cmd …` lines (the OS's Command-key shortcuts)
     remote: Option<std::sync::mpsc::Receiver<String>>,
+    /// `app.loads` when last looked at
+    seen_loads: u64,
+    /// the PLAYLISTS column: track id → playlist names, and the lists' fingerprint it was built from
+    pl_names: (u64, std::collections::HashMap<String, String>),
 }
 
 const ROW: f32 = 22.0;
@@ -79,7 +83,7 @@ impl Gui {
         app.watch_drives();
         let remote = crate::remote::listen(move || wake());
         Gui { app, deck_rects: [Rect::NOTHING; DECKS], jog_last: [None; DECKS], lane_drag: [None; DECKS], pad_held: None, frames: 0, test_shot: None,
-            rects: Default::default(), uitest: crate::uitest::UiTest::from_env(), heat_open: false, power_open: false, sys: SysStats::new(), battery: (std::time::Instant::now(), read_battery()), power_confirm: None, wave_browse: None, last_sel: usize::MAX, heat_paste: String::new(), hitting: false, focus_search: false, keys_open: false, remote }
+            rects: Default::default(), uitest: crate::uitest::UiTest::from_env(), heat_open: false, power_open: false, sys: SysStats::new(), battery: (std::time::Instant::now(), read_battery()), power_confirm: None, wave_browse: None, last_sel: usize::MAX, heat_paste: String::new(), hitting: false, focus_search: false, keys_open: false, remote, seen_loads: 0, pl_names: (0, Default::default()) }
     }
 
     /// in learn mode a click on a mappable control picks it; returns true if it was used up that way
@@ -489,6 +493,14 @@ impl Gui {
         let jr = if platter_left { Rect::from_min_size(pos2(r.left() + 6.0, r.center().y - jd / 2.0), vec2(jd, jd)) }
             else { Rect::from_min_size(pos2(r.right() - 6.0 - jd, r.center().y - jd / 2.0), vec2(jd, jd)) };
         self.jog(ui, i, jr);
+        // LOAD LOCK: a padlock in the screen's corner above the platter
+        let lr = if platter_left { Rect::from_min_size(r.left_top() + vec2(4.0, 4.0), vec2(18.0, 18.0)) } else { Rect::from_min_size(pos2(r.right() - 22.0, r.top() + 4.0), vec2(18.0, 18.0)) };
+        let resp = ui.interact(lr, ui.id().with(("lock", i)), Sense::click());
+        self.reg(format!("lock{i}"), lr);
+        if resp.clicked() { let d = &mut self.app.decks[i]; d.locked = !d.locked; let on = d.locked; self.app.say(&format!("Deck {} {}", i + 1, if on { "locked: nothing loads onto it" } else { "unlocked" }), 3.0); }
+        let locked = self.app.decks[i].locked;
+        paint_lock(ui.painter(), lr, locked, if locked { col } else if resp.hovered() { FG } else { DIM });
+        resp.on_hover_text(if locked { "Load lock on: click to unlock" } else { "Load lock: stop anything loading onto this deck" });
         let text = if platter_left { Rect::from_min_max(pos2(jr.right() + 10.0, r.top() + 6.0), pos2(r.right() - 10.0, r.bottom() - 6.0)) }
             else { Rect::from_min_max(pos2(r.left() + 10.0, r.top() + 6.0), pos2(jr.left() - 10.0, r.bottom() - 6.0)) };
         let p = ui.painter().with_clip_rect(text);
@@ -524,7 +536,7 @@ impl Gui {
         let tempo = format!("{:+.2}% {}", (d.rate() - 1.0) * 100.0, if rg == 100.0 { "W".into() } else { format!("±{rg}") });
         p.text(pos2(c2, y2), egui::Align2::RIGHT_TOP, tempo, mono(small), if d.pitch.abs() < 1e-6 { MUTED } else { FG });
         let master = self.app.tempo_master() == Some(i);
-        let mut flags: Vec<(String, Color32)> = [(master, "MASTER", CUE), (d.sync, "SYNC", col), (d.mt, "MT", col)].into_iter().filter(|f| f.0).map(|f| (f.1.to_string(), f.2)).collect();
+        let mut flags: Vec<(String, Color32)> = [(master, "MASTER", CUE), (d.sync, "SYNC", col), (d.mt, "MT", col), (d.locked, "LOCK", col)].into_iter().filter(|f| f.0).map(|f| (f.1.to_string(), f.2)).collect();
         if let Some(t) = phase_tag(d) { flags.insert(flags.len().min(2), t); }
         let mut fx = c1 + cw / 2.0 - flags.iter().map(|f| f.0.len() as f32 * small * 0.62 + 6.0).sum::<f32>() / 2.0;
         for (s, c) in flags {
@@ -1135,15 +1147,17 @@ impl Gui {
 
     fn track_list(&mut self, ui: &mut Ui) {
         let w = ui.available_width();
-        // columns: #, Title, Artist, BPM, Key, Time, Deck
+        // columns: #, Title, Artist, Playlists, BPM, Key, Time, Deck
         let fixed = 44.0 + 72.0 + 60.0 + 64.0 + 52.0;
         let flex = (w - fixed).max(200.0);
-        let cols = [44.0, flex * 0.6, flex * 0.4, 72.0, 60.0, 64.0, 52.0];
+        let cols = [44.0, flex * 0.45, flex * 0.3, flex * 0.25, 72.0, 60.0, 64.0, 52.0];
+        let fp = self.app.lists.fingerprint();
+        if fp != self.pl_names.0 { self.pl_names = (fp, self.app.lists.membership()); }
         let xs: Vec<f32> = cols.iter().scan(0.0, |acc, c| { let x = *acc; *acc += c; Some(x) }).collect();
         // header
         let (hr, _) = ui.allocate_exact_size(vec2(w, 24.0), Sense::hover());
         ui.painter().rect_filled(hr, 0.0, RAISE);
-        let heads: [(&str, Option<SortKey>); 7] = [("#", None), ("TITLE", Some(SortKey::Title)), ("ARTIST", Some(SortKey::Artist)), ("BPM", Some(SortKey::Bpm)), ("KEY", Some(SortKey::Key)), ("TIME", Some(SortKey::Time)), ("DECK", None)];
+        let heads: [(&str, Option<SortKey>); 8] = [("#", None), ("TITLE", Some(SortKey::Title)), ("ARTIST", Some(SortKey::Artist)), ("PLAYLISTS", None), ("BPM", Some(SortKey::Bpm)), ("KEY", Some(SortKey::Key)), ("TIME", Some(SortKey::Time)), ("DECK", None)];
         for (k, (label, key)) in heads.iter().enumerate() {
             let r = Rect::from_min_size(pos2(hr.left() + xs[k], hr.top()), vec2(cols[k], hr.height()));
             let resp = ui.interact(r, ui.id().with(("hdr", k)), Sense::click());
@@ -1212,23 +1226,24 @@ impl Gui {
                 cell(0, format!("{}", self.app.list.view_pos.get(k).copied().unwrap_or(k) + 1), MUTED, true);
                 cell(1, t.title.clone(), tc, false);
                 cell(2, t.artist.clone(), if dim { DIM } else { FG }, false);
+                cell(3, self.pl_names.1.get(&t.id).cloned().unwrap_or_default(), MUTED, false);
                 let bpm = match t.bpm { Some(b) if b > 0.0 => if b.fract().abs() > 1e-9 { format!("{b:.2}") } else { format!("{b:.0}") }, Some(_) => "?".into(), None if t.failed => "?".into(), None => "…".into() };
-                cell(3, bpm, if t.grid_manual { LOOP } else { MUTED }, true);
+                cell(4, bpm, if t.grid_manual { LOOP } else { MUTED }, true);
                 match t.key.and_then(camelot) {
                     Some(c) => {
                         // mixes with the playing deck: same key bright, a neighbour (±1, A⇄B) softer
                         let a = if ref_key == Some(c) { 90 } else if keys_match(Some(c), ref_key) { 50 } else { 0 };
                         if a > 0 {
-                            let kr = Rect::from_min_size(pos2(rect.left() + xs[4] + 4.0, rect.top() + 3.0), vec2(36.0, ROW - 6.0));
+                            let kr = Rect::from_min_size(pos2(rect.left() + xs[5] + 4.0, rect.top() + 3.0), vec2(36.0, ROW - 6.0));
                             p.rect_filled(kr, 3.0, Color32::from_rgba_unmultiplied(80, 220, 140, a));
                             p.rect_stroke(kr, 3.0, Stroke::new(1.0_f32, Color32::from_rgba_unmultiplied(80, 220, 140, a + 60)), StrokeKind::Inside);
                         }
-                        cell(4, c.label(), rgb(c.color()), true);
+                        cell(5, c.label(), rgb(c.color()), true);
                     }
-                    None => cell(4, if t.key == Some(-1) || t.failed { "?".into() } else if t.bpm.is_none() { "…".into() } else { String::new() }, MUTED, true),
+                    None => cell(5, if t.key == Some(-1) || t.failed { "?".into() } else if t.bpm.is_none() { "…".into() } else { String::new() }, MUTED, true),
                 }
-                cell(5, t.duration.map(|d| { let s = fmt_time(d); s[..s.len() - 2].to_string() }).unwrap_or_default(), MUTED, true);
-                cell(6, on_deck.map(|d| (d + 1).to_string()).unwrap_or_default(), MUTED, true);
+                cell(6, t.duration.map(|d| { let s = fmt_time(d); s[..s.len() - 2].to_string() }).unwrap_or_default(), MUTED, true);
+                cell(7, on_deck.map(|d| (d + 1).to_string()).unwrap_or_default(), MUTED, true);
                 if resp.clicked() {
                     let m = ui.input(|x| x.modifiers);
                     self.app.list.click(k, m.command || m.ctrl, m.shift);
@@ -1332,6 +1347,7 @@ impl Gui {
                     for (v, l) in spins { ui.selectable_value(&mut spin, v, l); }
                 });
                 if (spin - self.app.store.settings.spin).abs() > 1e-9 { self.app.set_spin(spin); }
+                if ui.checkbox(&mut self.app.store.settings.browse_close_on_load, "Back to the decks after loading a track from BROWSE").changed() { self.app.store.dirty_settings = true; }
                 ui.label(egui::RichText::new("Music folders").strong());
                 for f in self.app.store.settings.folders.clone() {
                     ui.horizontal(|ui| {
@@ -1613,6 +1629,8 @@ impl Gui {
     /// WAVE mode hides the library; scrolling (browse knob, arrow keys) pops it up over the lanes.
     /// 1-4 load the highlighted track on that deck, Enter on the usual one, Esc closes; it goes after 6 s idle.
     fn wave_browser(&mut self, ctx: &egui::Context) {
+        // a track went onto a deck (keys, mouse or the controller's LOAD): close
+        if self.app.loads != self.seen_loads { self.seen_loads = self.app.loads; self.wave_browse = None; }
         let sel = self.app.list.sel;
         let moved = sel != self.last_sel && self.last_sel != usize::MAX;
         self.last_sel = sel;
@@ -1898,6 +1916,20 @@ fn read_battery() -> Option<(u32, bool)> {
         }
     }
     None
+}
+/// a padlock: shackle closed when locked, lifted open when not
+fn paint_lock(p: &egui::Painter, r: Rect, locked: bool, c: Color32) {
+    let body = Rect::from_center_size(pos2(r.center().x, r.center().y + 3.0), vec2(10.0, 8.0));
+    p.rect_filled(body, 1.5, c);
+    let (cx, top, lift) = (body.center().x, body.top(), if locked { 0.0 } else { 3.0 });
+    let pts: Vec<egui::Pos2> = (0..=12).map(|k| {
+        let a = std::f32::consts::PI * k as f32 / 12.0;
+        pos2(cx - 3.2 * a.cos(), top - lift - 3.5 * a.sin())
+    }).collect();
+    let mut line = vec![pos2(cx - 3.2, top)];
+    line.extend(pts);
+    if locked { line.push(pos2(cx + 3.2, top)); }
+    p.add(egui::Shape::line(line, Stroke::new(1.6_f32, c)));
 }
 fn deck_key(k: Key) -> Option<(usize, Option<usize>)> {
     use Key::*;
