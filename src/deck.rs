@@ -82,6 +82,8 @@ pub struct Deck {
     pos_t: Instant,
     /// the waveform's own clock: follows `now()` smoothly instead of jumping with each audio report
     vis: std::cell::Cell<(f64, Instant)>,
+    /// how far the drawn position sits behind `now()` (output latency + Settings offset - a frame), seconds
+    pub vis_delay: f64,
     speed: f64,
     pub playing: bool,
     /// -1..1 from the tempo slider (top = negative, Pioneer style)
@@ -131,7 +133,7 @@ impl Deck {
     pub fn new(i: usize, tx: Sender<Cmd>) -> Deck {
         let now = Instant::now();
         Deck {
-            i, tx, track: None, ana: None, duration: 0.0, sr: 44100.0, pos: 0.0, pos_t: now, vis: std::cell::Cell::new((0.0, now)), speed: 0.0, playing: false, pitch: 0.0, range_idx: 0,
+            i, tx, track: None, ana: None, duration: 0.0, sr: 44100.0, pos: 0.0, pos_t: now, vis: std::cell::Cell::new((0.0, now)), vis_delay: 0.0, speed: 0.0, playing: false, pitch: 0.0, range_idx: 0,
             sync: false, sync_since: now, sync_rate: 1.0, sync_mult: 1.0, sync_trim: 0.0, sync_with: None, sync_track: 0, phase_err: None, has_master: false, cue: 0.0, hot: [None; 8], lp: Loop::default(), quant: true,
             pad_mode: PadMode::HotCue, previewing: false, touch: false, loading: false, loop_in_down: None, sent_rate: None, coasting: false,
             coast_hold: now, started_at: None, mt: true, locked: false, seek_seq: 0, taps: vec![], mono: None, rephrase_gen: 0, rephrase_at: None,
@@ -179,7 +181,8 @@ impl Deck {
     /// judders. This clock runs at the deck's speed and eases a little towards `now()` each frame;
     /// seeks and stops (more than 40 ms off) snap.
     pub fn vis_now(&self) -> f64 {
-        let raw = self.now();
+        // what's heard when this frame reaches the screen, not what was just rendered
+        let raw = (self.now() - self.vis_delay * self.speed).clamp(0.0, self.duration.max(0.0));
         let (vt, va) = self.vis.get();
         let pred = vt + va.elapsed().as_secs_f64() * self.speed;
         let err = raw - pred;

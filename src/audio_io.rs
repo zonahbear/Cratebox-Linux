@@ -69,14 +69,19 @@ fn pick_config(dev: &cpal::Device, rate: Option<u32>, want_ch: u16, buffer: u32)
     Ok((d.config(), d.sample_format()))
 }
 
-fn build<T>(dev: &cpal::Device, cfg: &StreamConfig, mut fill: impl FnMut(&mut [f32]) + Send + 'static, err: Arc<Mutex<Option<String>>>, beat: Arc<AtomicU64>) -> Result<cpal::Stream, String>
+fn build<T>(dev: &cpal::Device, cfg: &StreamConfig, mut fill: impl FnMut(&mut [f32]) + Send + 'static, err: Arc<Mutex<Option<String>>>, beat: Arc<AtomicU64>, lat: Arc<AtomicU64>) -> Result<cpal::Stream, String>
 where T: cpal::SizedSample + cpal::FromSample<f32> {
     let mut scratch: Vec<f32> = Vec::with_capacity(16384);
     let e2 = err.clone();
     let mut promoted = false;
-    dev.build_output_stream::<T, _, _>(cfg, move |data: &mut [T], _| {
+    let per_us = cfg.channels as u64 * cfg.sample_rate.0 as u64;
+    dev.build_output_stream::<T, _, _>(cfg, move |data: &mut [T], info| {
         if !promoted { promoted = true; promote_to_realtime(); }
         beat.fetch_add(1, Ordering::Relaxed);
+        // how long until the end of this buffer is heard: the device's delay plus the buffer itself
+        let ts = info.timestamp();
+        let dev_us = ts.playback.duration_since(&ts.callback).map_or(0, |d| d.as_micros() as u64);
+        lat.store(dev_us + data.len() as u64 * 1_000_000 / per_us.max(1), Ordering::Relaxed);
         if scratch.len() < data.len() { scratch.resize(data.len(), 0.0); }
         let s = &mut scratch[..data.len()];
         fill(s);
@@ -97,11 +102,11 @@ fn promote_to_realtime() {
     }
 }
 
-fn open_stream(dev: &cpal::Device, cfg: &StreamConfig, fmt: SampleFormat, fill: impl FnMut(&mut [f32]) + Send + 'static, err: Arc<Mutex<Option<String>>>, beat: Arc<AtomicU64>) -> Result<cpal::Stream, String> {
+fn open_stream(dev: &cpal::Device, cfg: &StreamConfig, fmt: SampleFormat, fill: impl FnMut(&mut [f32]) + Send + 'static, err: Arc<Mutex<Option<String>>>, beat: Arc<AtomicU64>, lat: Arc<AtomicU64>) -> Result<cpal::Stream, String> {
     let s = match fmt {
-        SampleFormat::F32 => build::<f32>(dev, cfg, fill, err, beat)?,
-        SampleFormat::I16 => build::<i16>(dev, cfg, fill, err, beat)?,
-        SampleFormat::I32 => build::<i32>(dev, cfg, fill, err, beat)?,
+        SampleFormat::F32 => build::<f32>(dev, cfg, fill, err, beat, lat)?,
+        SampleFormat::I16 => build::<i16>(dev, cfg, fill, err, beat, lat)?,
+        SampleFormat::I32 => build::<i32>(dev, cfg, fill, err, beat, lat)?,
         f => return Err(format!("unsupported sample format {f:?}")),
     };
     s.play().map_err(|e| e.to_string())?;
@@ -110,10 +115,11 @@ fn open_stream(dev: &cpal::Device, cfg: &StreamConfig, fmt: SampleFormat, fill: 
 
 /// Counts a stream's callbacks so the UI thread can tell when it has stopped being called (after a
 /// sleep/wake the PipeWire connection can die without the stream ever reporting an error).
-struct Beat { n: Arc<AtomicU64>, seen: u64, at: Instant }
+/// Also carries the stream's output latency (µs, written by the callback).
+struct Beat { n: Arc<AtomicU64>, lat: Arc<AtomicU64>, seen: u64, at: Instant }
 
 impl Beat {
-    fn new() -> Beat { Beat { n: Arc::new(AtomicU64::new(0)), seen: 0, at: Instant::now() } }
+    fn new() -> Beat { Beat { n: Arc::new(AtomicU64::new(0)), lat: Arc::new(AtomicU64::new(0)), seen: 0, at: Instant::now() } }
     fn reset(&mut self) { self.seen = self.n.load(Ordering::Relaxed); self.at = Instant::now(); }
     /// true once the count hasn't moved for `limit`
     fn stale(&mut self, limit: Duration) -> bool {
@@ -157,6 +163,8 @@ impl AudioIo {
         AudioIo { engine, sr, channels: 2, device: String::new(), stream: None, hp_stream: None, hp_device: String::new(), null_stop: Arc::new(AtomicBool::new(true)), null_thread: None, error: Arc::new(Mutex::new(None)), beat: Beat::new(), hp_beat: Beat::new() }
     }
     pub fn running(&self) -> bool { self.stream.is_some() }
+    /// seconds from a rendered buffer's end to it being heard (0 with no sound card: the timer mode)
+    pub fn latency(&self) -> f64 { if self.stream.is_some() { self.beat.lat.load(Ordering::Relaxed) as f64 / 1e6 } else { 0.0 } }
 
     /// open `name` ("" = the system default); on failure the engine keeps running silently
     pub fn open(&mut self, name: &str, buffer: u32) -> Result<(), String> {
@@ -168,7 +176,7 @@ impl AudioIo {
             let (cfg, fmt) = pick_config(&dev, Some(self.sr as u32), 4, buffer)?;
             let ch = cfg.channels as usize;
             let eng = self.engine.clone();
-            let s = open_stream(&dev, &cfg, fmt, move |out| render_into(&eng, out, ch), self.error.clone(), self.beat.n.clone())?;
+            let s = open_stream(&dev, &cfg, fmt, move |out| render_into(&eng, out, ch), self.error.clone(), self.beat.n.clone(), self.beat.lat.clone())?;
             Ok::<_, String>((s, ch))
         })();
         match res {
@@ -209,7 +217,7 @@ impl AudioIo {
         let (cfg, fmt) = pick_config(&dev, Some(self.sr as u32), 2, 0)?;
         let ch = cfg.channels as usize;
         let (prod, mut cons): (_, Consumer) = ring((self.sr * 0.5) as usize);
-        let s = open_stream(&dev, &cfg, fmt, move |out| cons.pull(out, ch), self.error.clone(), self.hp_beat.n.clone())?;
+        let s = open_stream(&dev, &cfg, fmt, move |out| cons.pull(out, ch), self.error.clone(), self.hp_beat.n.clone(), self.hp_beat.lat.clone())?;
         if let Ok(mut e) = self.engine.lock() { e.hp_tap = Some(prod); }
         self.hp_stream = Some(s);
         self.hp_beat.reset();
