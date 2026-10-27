@@ -64,7 +64,7 @@ fn row_ui(ui: &mut Ui, r: Rect) -> Ui {
     c
 }
 /// the channel order on the mixer: 3 1 2 4 with four decks, like a four-channel DJM
-pub fn mixer_order(four: bool) -> Vec<usize> { if four { vec![2, 0, 1, 3] } else { vec![0, 1] } }
+pub fn mixer_order(n: usize) -> Vec<usize> { match n { 4 => vec![2, 0, 1, 3], 3 => vec![2, 0, 1], _ => vec![0, 1] } }
 
 impl Gui {
     pub fn new(cc: &eframe::CreationContext<'_>) -> Gui {
@@ -161,10 +161,11 @@ impl Gui {
                 let r = button(ui, &format!("{hl} ▾"), vec2(w, 22.0), lit, CUE, 11.5).on_hover_text("TrueCurve heat curves for a Puffco Peak Pro / Proxy");
                 self.reg("heat", r.rect);
                 if r.clicked() { self.heat_open = !self.heat_open; }
-                let four = self.app.four();
-                let r = button(ui, "4 DECKS", vec2(62.0, 22.0), four, FG, 11.5).on_hover_text("Four decks: 3 and 4 on the outer mixer channels");
+                let n = self.app.deck_count();
+                let r = button(ui, &format!("{n} DECKS"), vec2(62.0, 22.0), n > 2, FG, 11.5)
+                    .on_hover_text("2 → 3 → 4 decks. 3: decks 1 and 3 share the left side (layer button / SMART CFX), 2 on the right. 4: 3 and 4 on the outer channels");
                 self.reg("four", r.rect);
-                if r.clicked() { self.app.set_four(!four); }
+                if r.clicked() { self.app.set_decks(if n == 4 { 2 } else { n + 1 }); }
                 let wave = self.app.store.settings.wave;
                 let r = button(ui, "WAVE", vec2(50.0, 22.0), wave, deck_color(2), 11.5).on_hover_text("Just the waveforms");
                 self.reg("wave", r.rect);
@@ -764,7 +765,7 @@ impl Gui {
         ui.painter().rect_filled(rect, 5.0, PANEL);
         let frozen = self.app.learning();
         let inner = rect.shrink2(vec2(6.0, 5.0));
-        let chans = mixer_order(self.app.four());
+        let chans = mixer_order(self.app.deck_count());
         let n = chans.len();
         let rh = 20.0;
         let fx_h = 2.0 * rh + GAP;
@@ -878,13 +879,13 @@ impl Gui {
         {
             let ui = &mut row_ui(ui, r2);
             let w = fx_r.width();
-            let units: Vec<usize> = if self.app.four() { vec![0, 1, 2, 3, DECKS] } else { vec![0, 1, DECKS] };
+            let units: Vec<usize> = (0..self.app.deck_count()).chain([DECKS]).collect();
             for u in units {
                 let label = if u == DECKS { "M".to_string() } else { format!("{}", u + 1) };
                 let c = if u == DECKS { FG } else { deck_color(u) };
                 if button(ui, &label, vec2(18.0, rh), self.app.fx.ch == u, c, 10.5).on_hover_text(if u == DECKS { "BEAT FX on the master" } else { "BEAT FX on this channel" }).clicked() { self.app.fx_channel(u); }
             }
-            let used = if self.app.four() { 5.0 } else { 3.0 } * (18.0 + GAP);
+            let used = (self.app.deck_count() + 1) as f32 * (18.0 + GAP);
             let lw = (w - used - 54.0 - GAP).max(30.0);
             let mut dv = self.app.fx.depth as f32;
             let r = hslider(ui, &mut dv, vec2(lw, rh - 2.0), frozen).on_hover_text(format!("LEVEL/DEPTH {:.0}%", dv * 100.0));
@@ -1429,7 +1430,7 @@ impl Gui {
         if up { self.app.list.move_sel(-1); }
         if (down || up) && self.wave_browse.is_some() { self.wave_browse = Some(std::time::Instant::now()); }
         let evs: Vec<_> = if self.wave_browse.is_some() {
-            let n = if self.app.four() { 4 } else { 2 };
+            let n = self.app.deck_count();
             evs.into_iter().filter(|(key, pressed, m)| {
                 let d = match key { Key::Num1 => Some(0), Key::Num2 => Some(1), Key::Num3 => Some(2), Key::Num4 => Some(3), _ => None };
                 if m.any() { return true; }
@@ -1469,7 +1470,7 @@ impl Gui {
                 Key::Delete | Key::Backspace => if matches!(self.app.view, View::Pl(_)) { self.app.remove_from_playlist(); },
                 Key::Escape => { if self.app.learning() { self.app.stop_learn(); } self.app.ui.settings_open = false; self.heat_open = false; self.keys_open = false; self.power_open = false; }
                 Key::F1 => { let w = &mut self.app.store.settings.wave; *w = !*w; self.app.store.dirty_settings = true; }
-                Key::F2 => { let f = self.app.four(); self.app.set_four(!f); }
+                Key::F2 => { let n = self.app.deck_count(); self.app.set_decks(if n == 4 { 2 } else { n + 1 }); }
                 Key::F3 => { let b = &mut self.app.store.settings.browse; *b = !*b; self.app.store.dirty_settings = true; }
                 Key::F4 => self.heat_open = !self.heat_open,
                 Key::F11 => { let fs = ctx.input(|i| i.viewport().fullscreen.unwrap_or(false)); ctx.send_viewport_cmd(egui::ViewportCommand::Fullscreen(!fs)); }
@@ -1576,7 +1577,6 @@ impl Gui {
         let rows = 11usize;
         let view = &self.app.list.view;
         let start = sel.saturating_sub(rows / 2).min(view.len().saturating_sub(rows));
-        let four = self.app.four();
         egui::Window::new("wave_browser").title_bar(false).resizable(false).collapsible(false)
             .anchor(egui::Align2::CENTER_CENTER, vec2(0.0, 0.0)).fixed_size(vec2(560.0, 0.0))
             .frame(egui::Frame::window(&ctx.style()).fill(PANEL))
@@ -1599,7 +1599,7 @@ impl Gui {
                     p.text(pos2(r.right() - 6.0, r.center().y), egui::Align2::RIGHT_CENTER, key, mono(12.0), c);
                 }
                 ui.add_space(4.0);
-                ui.label(egui::RichText::new(if four { "1 2 3 4 load on that deck · Enter loads · Esc closes" } else { "1 2 load on that deck · Enter loads · Esc closes" }).size(11.0).color(MUTED));
+                ui.label(egui::RichText::new(format!("{} load on that deck · Enter loads · Esc closes", (1..=self.app.deck_count()).map(|d| d.to_string()).collect::<Vec<_>>().join(" "))).size(11.0).color(MUTED));
             });
     }
 
@@ -1982,7 +1982,9 @@ impl eframe::App for Gui {
                 for &i in &shown {
                     let x = if i % 2 == 0 { full.left() } else { full.right() - dw };
                     let y = top + if i >= 2 { per + GAP } else { 0.0 };
-                    self.deck(ui, i, Rect::from_min_size(pos2(x, y), vec2(dw, per)));
+                    // 3 decks: deck 2 has the right side to itself
+                    let h = if i == 1 && !self.app.deck_active(3) { row_h } else { per };
+                    self.deck(ui, i, Rect::from_min_size(pos2(x, y), vec2(dw, h)));
                 }
                 self.mixer(ui, mx);
                 top += row_h + GAP + 2.0;

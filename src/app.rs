@@ -164,7 +164,8 @@ impl App {
         for (i, d) in decks.iter_mut().enumerate() { d.mt = s.mt.get(i).copied().unwrap_or(true); d.spin_secs = s.spin; d.sr = sr; }
         let fx = BeatFx::new(tx.clone(), &s.bfx_fx, s.bfx_depth, s.bfx_ch, &s.bfx_beats);
         let mut mixer = MixerParams::default();
-        mixer.active = [true, true, s.four, s.four];
+        let n = if !s.four { 2 } else if s.three { 3 } else { 4 };
+        mixer.active = [true, true, n >= 3, n >= 4];
         let mut lists = Lists::default();
         lists.lists = store.playlists.clone();
         lists.open = s.pl_open.iter().cloned().collect();
@@ -178,6 +179,7 @@ impl App {
         };
         app.midi.use_profile("learn", vec![]);
         app.midi.four = app.store.settings.four;
+        app.midi.three = app.store.settings.four && app.store.settings.three;
         for d in app.decks.iter() { let _ = app.tx.send(Cmd::Deck(d.i, crate::player::PlayerCmd::Mt(d.mt))); }
         let _ = app.tx.send(Cmd::Mixer(app.mixer));
         app.apply_headphones(false);
@@ -825,8 +827,11 @@ impl App {
         format!("Added {n} curve{}.", if n > 1 { "s" } else { "" })
     }
 
-    pub fn deck_active(&self, i: usize) -> bool { i < 2 || self.store.settings.four }
+    pub fn deck_active(&self, i: usize) -> bool { i < self.deck_count() }
+    /// 3 or 4 decks: the stacked layout, layer buttons on
     pub fn four(&self) -> bool { self.store.settings.four }
+    /// 2, 3 or 4
+    pub fn deck_count(&self) -> usize { let s = &self.store.settings; if !s.four { 2 } else if s.three { 3 } else { 4 } }
     pub fn peers(&self) -> [Peer; DECKS] { std::array::from_fn(|i| self.decks[i].peer(self.deck_active(i))) }
     pub fn toggle_play(&mut self, i: usize) { let p = self.peers(); self.decks[i].toggle_play(&p); }
     pub fn set_playing(&mut self, i: usize, on: bool) { let p = self.peers(); self.decks[i].set_playing(on, &p); }
@@ -844,18 +849,26 @@ impl App {
         let p = self.peers();
         self.decks.iter().filter(|d| d.sync && self.deck_active(d.i)).find_map(|d| d.master(&p).map(|m| m.i))
     }
-    pub fn set_four(&mut self, on: bool) {
-        self.store.settings.four = on;
+    pub fn set_four(&mut self, on: bool) { self.set_decks(if on { 4 } else { 2 }); }
+    /// 2, 3 (1 and 3 on the left, the left layer button / SMART CFX switches them; 2 alone on the right) or 4 decks
+    pub fn set_decks(&mut self, n: usize) {
+        let n = n.clamp(2, 4);
+        self.store.settings.four = n >= 3;
+        self.store.settings.three = n == 3;
         self.store.dirty_settings = true;
-        self.mixer.active = [true, true, on, on];
+        self.mixer.active = [true, true, n >= 3, n >= 4];
         self.send_mixer();
-        self.midi.four = on;
-        if !on {
-            for i in 2..DECKS { if self.decks[i].playing { self.set_playing(i, false); } self.fx.release_deck(i); }
-            for s in 0..2 { if let Some(crate::midi::Action::Side { side, from, to }) = self.midi.set_side(s, s) { self.on_side(side, from, to); } }
-            if self.fx.ch >= 2 && self.fx.ch < DECKS { let c = self.fx.ch - 2; let ck = self.clock_fn(); self.fx.channel(c, &ck); }
-        }
-        self.say(if on { "4 decks: decks 3 and 4 are on the outer channels (3 left, 4 right). Layer buttons switch the controller's sides." } else { "2 decks" }, 5.0);
+        self.midi.four = n >= 3;
+        self.midi.three = n == 3;
+        for i in n..DECKS { if self.decks[i].playing { self.set_playing(i, false); } self.fx.release_deck(i); }
+        // a side on a deck that's gone goes back to its own
+        for s in 0..2 { if self.midi.side[s] >= n { if let Some(crate::midi::Action::Side { side, from, to }) = self.midi.set_side(s, s) { self.on_side(side, from, to); } } }
+        if self.fx.ch >= n && self.fx.ch < DECKS { let c = self.fx.ch - 2; let ck = self.clock_fn(); self.fx.channel(c, &ck); }
+        self.say(match n {
+            4 => "4 decks: decks 3 and 4 are on the outer channels (3 left, 4 right). Layer buttons switch the controller's sides.",
+            3 => "3 decks: 1 and 3 on the left (the left layer button switches them), 2 on the right",
+            _ => "2 decks",
+        }, 5.0);
     }
     /// the audio clock now (seconds), from the last report and the time since
     pub fn audio_clock(&self) -> f64 { self.status_snap.time + self.status_snap.at.elapsed().as_secs_f64() }

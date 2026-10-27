@@ -235,6 +235,8 @@ pub struct Engine {
     pub side: [usize; 2],
     /// set by the app: 4-deck mode (layers only switch then)
     pub four: bool,
+    /// 3-deck mode: only the left side switches (1 ⇄ 3)
+    pub three: bool,
     fx_lever: [bool; 2],
     /// setting up the layer buttons: which side's button comes next
     pub capture: Option<usize>,
@@ -245,7 +247,7 @@ impl Default for Engine { fn default() -> Self { Engine::new() } }
 impl Engine {
     pub fn new() -> Engine {
         Engine { profile: "learn", table: HashMap::new(), lsb_table: HashMap::new(), msb: HashMap::new(), led_cache: HashMap::new(), led_entries: vec![], learned: vec![], learning: None, out: vec![], log: vec![], hint: None, learned_changed: false,
-            side: [0, 1], four: false, fx_lever: [false; 2], capture: None }
+            side: [0, 1], four: false, three: false, fx_lever: [false; 2], capture: None }
     }
     pub fn use_profile(&mut self, id: &str, learned: Vec<Entry>) {
         let ps = profiles();
@@ -313,7 +315,7 @@ impl Engine {
         }
         let on = if ty == 0x90 { v > 0 } else if ty == 0x80 { false } else { v > 63 };
         match name {
-            "layer" => { if on && self.four && (0..2).contains(&e.3) { return self.toggle_side(e.3 as usize); } None }
+            "layer" => { if on && self.four && (0..2).contains(&e.3) && !(self.three && e.3 == 1) { return self.toggle_side(e.3 as usize); } None }
             // CH1 / CH2 send 7F while the lever is there, 00 when it leaves; neither = MASTER
             "fxCh" => {
                 let k = arg.parse::<usize>().unwrap_or(0).min(1);
