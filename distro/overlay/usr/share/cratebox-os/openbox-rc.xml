@@ -6,6 +6,9 @@
   <keyboard>
     <keybind key="A-F4"><action name="Close"/></keybind>
     <keybind key="C-A-q"><action name="Close"/></keybind>
+    <!-- Fn+F5 / Fn+F6: keyboard backlight -->
+    <keybind key="XF86KbdBrightnessDown"><action name="Execute"><command>cratebox-kbdlight down</command></action></keybind>
+    <keybind key="XF86KbdBrightnessUp"><action name="Execute"><command>cratebox-kbdlight up</command></action></keybind>
   </keyboard>
   <mouse/>
   <applications>
