@@ -104,7 +104,7 @@ pub struct App {
     pub copying: Option<(u64, u64)>,
     /// when to ask the controller for its knob/fader positions again
     midi_query: Vec<Instant>,
-    /// the FIREFOX box's Downloads folder: when it was last looked at, and its modified time then
+    /// the Cratebox Downloads folder (WEB button and Nicotine+): when it was last looked at, and its modified time then
     downloads: (Instant, Option<std::time::SystemTime>),
     pub hp_note: String,
     /// output that stopped and is being reopened: (device name, next attempt)
@@ -245,7 +245,7 @@ impl App {
             if let Some(w) = wake { w(); }
         });
     }
-    /// tracks downloaded with FIREFOX or Nicotine+ (both save to ~/Music/Cratebox Downloads)
+    /// tracks downloaded with WEB (Chrome) or Nicotine+ (both save to ~/Music/Cratebox Downloads)
     /// join the collection: the folder becomes a music folder and is rescanned whenever it changes
     fn watch_downloads(&mut self) {
         if self.downloads.0.elapsed() < Duration::from_secs(4) || std::env::var_os("CRATEBOX_NO_DRIVES").is_some() { return; }
@@ -1282,5 +1282,5 @@ pub fn level(p: f32) -> f32 { ((20.0 * (p + 1e-9).log10() + 42.0) / 42.0).clamp(
 
 impl Default for App { fn default() -> Self { App::new() } }
 
-/// where the FIREFOX box and Nicotine+ (Soulseek) save downloads (set up by cratebox-firefox and the kiosk session)
+/// where the WEB button (Chrome) and Nicotine+ (Soulseek) save downloads (set up by cratebox-web and the kiosk session)
 pub fn downloads_dir() -> Option<PathBuf> { dirs::home_dir().map(|h| h.join("Music/Cratebox Downloads")) }

@@ -1,0 +1,26 @@
+#!/bin/sh
+# WEB button: Chrome (already on Cratebox OS) in its own profile, so it opens fast and saves straight to
+# ~/Music/Cratebox Downloads, which Cratebox adds to the collection (and copies to a plugged-in stick).
+# Chrome's own sandbox isolates pages; it runs niced so a busy page can't take CPU from the audio.
+DATA="$HOME/.local/share/cratebox"
+PROFILE="$DATA/web"
+DL="$HOME/Music/Cratebox Downloads"
+LOG="$DATA/web.log"
+mkdir -p "$DL" "$PROFILE/Default"
+exec >>"$LOG" 2>&1
+echo "--- $(date) WEB button"
+# first run: downloads go to the Cratebox folder without asking
+if [ ! -f "$PROFILE/Default/Preferences" ]; then
+    dl_json=$(printf '%s' "$DL" | sed 's/\\/\\\\/g; s/"/\\"/g')
+    printf '{"download":{"default_directory":"%s","prompt_for_download":false,"directory_upgrade":true},"savefile":{"default_directory":"%s"},"browser":{"has_seen_welcome_page":true}}\n' \
+        "$dl_json" "$dl_json" > "$PROFILE/Default/Preferences"
+fi
+for b in google-chrome-stable google-chrome chromium chromium-browser; do
+    if command -v "$b" >/dev/null; then
+        echo "starting: $b"
+        exec nice -n 10 "$b" --user-data-dir="$PROFILE" --no-first-run --no-default-browser-check \
+            --disable-session-crashed-bubble --hide-crash-restore-bubble --new-window "$@"
+    fi
+done
+echo "no Chrome or Chromium found"
+exit 1
