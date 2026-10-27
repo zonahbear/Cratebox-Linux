@@ -257,6 +257,12 @@ pub mod lorax {
     pub const LIVE: &str = "/p/app/thc/temp";
     pub const ACTIVE_SLOT: &str = "/p/app/hcs";
     pub const SOC: &str = "/p/bat/soc";
+    /// the lantern (mood light): on/off (1 byte) and its colour: r, g, b, 0, mode (1 = static), 0, 0, 0.
+    /// From community reverse engineering (HA-Puff puffco_ble, MIT; Fr0st3h's write-up), checked on a
+    /// Peak Pro there, not on a Proxy
+    pub const LANTERN_CMD: &str = "/p/app/ltrn/cmd";
+    pub const LANTERN_COLOR: &str = "/p/app/ltrn/colr";
+    pub fn lantern_color(c: [u8; 3]) -> [u8; 8] { [c[0], c[1], c[2], 0, 1, 0, 0, 0] }
     pub fn p_temp(s: u8) -> String { format!("/u/app/hc/{s}/temp") }
     pub fn p_time(s: u8) -> String { format!("/u/app/hc/{s}/time") }
     #[derive(Clone, Copy, Debug, PartialEq)]
@@ -329,6 +335,60 @@ use lorax::Fmt;
 #[derive(Clone, Default)]
 pub struct SlotBackup { temp: Option<Vec<u8>>, time: Option<Vec<u8>> }
 
+/// GLOW: a slow rainbow on the Puffco's lantern that breathes with the music. UI thread, every frame:
+/// `tick` takes the master level (0..1, peak) and the FX knob (0..1) and returns a colour when one is
+/// worth sending (at most 5 a second, and only when it has moved: a BLE write takes ~50-100 ms).
+/// The knob sets one of intensity / speed / sensitivity, eased so a twist never jumps.
+pub struct Glow { hue: f64, env: f64, knob: f64, sent: Option<[u8; 3]>, at: Instant, last: Instant }
+#[derive(Clone, Copy, PartialEq)]
+pub enum GlowKnob { Off, Intensity, Speed, Sensitivity }
+impl Default for Glow { fn default() -> Self { Glow::new() } }
+impl Glow {
+    pub fn new() -> Glow { let t = Instant::now(); Glow { hue: 0.0, env: 0.0, knob: 0.5, sent: None, at: t - Duration::from_secs(10), last: t } }
+    /// the colour for this moment, given seconds since the last call
+    pub fn color(&mut self, dt: f64, level: f64, knob: f64, what: GlowKnob) -> [u8; 3] {
+        let dt = dt.clamp(0.0, 0.5);
+        self.knob += (knob.clamp(0.0, 1.0) - self.knob) * (1.0 - (-dt / 0.4).exp());
+        let k = self.knob;
+        let (mut intensity, mut speed, mut sens) = (0.6, 0.04, 1.0);
+        match what {
+            GlowKnob::Intensity => intensity = 0.1 + 0.9 * k,
+            GlowKnob::Speed => speed = 0.005 + 0.3 * k * k,
+            GlowKnob::Sensitivity => sens = 0.3 + 2.7 * k,
+            GlowKnob::Off => {}
+        }
+        // the music's envelope: quick to rise, slow to fall (smooth, not a strobe)
+        let x = (level.max(0.0) * sens).min(1.0).powf(0.7);
+        let tau = if x > self.env { 0.12 } else { 0.8 };
+        self.env += (x - self.env) * (1.0 - (-dt / tau).exp());
+        self.hue = (self.hue + 360.0 * speed * dt * (1.0 + 0.6 * self.env)).rem_euclid(360.0);
+        let v = intensity * (0.2 + 0.8 * self.env);
+        hsv(self.hue, 0.85, v)
+    }
+    /// call every frame; Some(colour) when it's time to send one
+    pub fn tick(&mut self, level: f64, knob: f64, what: GlowKnob) -> Option<[u8; 3]> {
+        let dt = self.last.elapsed().as_secs_f64();
+        self.last = Instant::now();
+        let c = self.color(dt, level, knob, what);
+        if self.at.elapsed() < Duration::from_millis(200) { return None; }
+        let moved = self.sent.is_none_or(|p| (0..3).any(|i| (p[i] as i32 - c[i] as i32).abs() >= 3));
+        if !moved && self.at.elapsed() < Duration::from_secs(3) { return None; }
+        self.sent = Some(c); self.at = Instant::now();
+        Some(c)
+    }
+    /// the colour sent last (for the panel's swatch)
+    pub fn shown(&self) -> [u8; 3] { self.sent.unwrap_or([0, 0, 0]) }
+    /// forget what was sent (after GLOW was off or the Puffco reconnected)
+    pub fn reset(&mut self) { self.sent = None; }
+}
+fn hsv(h: f64, s: f64, v: f64) -> [u8; 3] {
+    let c = v * s;
+    let x = c * (1.0 - ((h / 60.0).rem_euclid(2.0) - 1.0).abs());
+    let (r, g, b) = match (h / 60.0) as i32 { 0 => (c, x, 0.0), 1 => (x, c, 0.0), 2 => (0.0, c, x), 3 => (0.0, x, c), 4 => (x, 0.0, c), _ => (c, 0.0, x) };
+    let m = v - c;
+    [((r + m) * 255.0).round() as u8, ((g + m) * 255.0).round() as u8, ((b + m) * 255.0).round() as u8]
+}
+
 /// what the runner needs from a device (the Puffco or the simulator); every call blocks the worker thread only
 trait Device: Send {
     fn name(&self) -> String;
@@ -351,6 +411,9 @@ trait Device: Send {
     fn is_sim(&self) -> bool { false }
     /// the simulator's stand-in for a draw (0..1)
     fn set_airflow(&mut self, _a: f64) {}
+    /// GLOW: lantern on/off and its colour (the simulator just takes them)
+    fn lantern(&mut self, _on: bool) -> bool { true }
+    fn lantern_color(&mut self, _c: [u8; 3]) -> bool { true }
 }
 
 /// the web app's simulator: SimHeater ticking in real time, with a little I/O delay and sensor noise
@@ -684,6 +747,8 @@ mod bluez {
     }
 
     impl Device for Ble {
+        fn lantern(&mut self, on: bool) -> bool { self.write(lorax::LANTERN_CMD, &[on as u8]) }
+        fn lantern_color(&mut self, c: [u8; 3]) -> bool { self.write(lorax::LANTERN_COLOR, &lorax::lantern_color(c)) }
         fn name(&self) -> String { self.name.clone() }
         fn id(&self) -> String { self.addr.clone() }
         fn connected(&mut self) -> bool {
@@ -771,7 +836,7 @@ pub struct View {
     pub puff_info: String,
 }
 
-enum Cmd { Scan(String), Pick(Found), Sim, Disconnect, Run(String, CurveDef, HeaterModel), Hold(f64, f64), Stop, Hit(f64), Panel(bool) }
+enum Cmd { Scan(String), Pick(Found), Sim, Disconnect, Run(String, CurveDef, HeaterModel), Hold(f64, f64), Stop, Hit(f64), Panel(bool), Glow(Option<[u8; 3]>) }
 /// what the app has to act on
 pub enum Event { Connected(bool), Puff(f64), Model(String, HeaterModel), DeviceId(String), Status(String) }
 
@@ -793,7 +858,7 @@ impl Heat {
         let shared = Arc::new(Mutex::new(View { label: "HEAT".into(), dev_text: "No device".into(), ..Default::default() }));
         let w = Worker { rx, ev: etx, shared: shared.clone(), dev: None, bus: None, scan_until: None, rejoin: None, last: None, auto: String::new(), phase: Phase::Idle, msg: String::new(),
             live: None, target: None, t: None, end: 0.0, battery: None, drop: 0.0, puff: 0.0, puff_info: String::new(), abort: false, panel: false,
-            found: vec![], others: vec![], t0: Instant::now() };
+            found: vec![], others: vec![], t0: Instant::now(), glow: None, lantern_on: false, glow_fails: 0 };
         let _ = std::thread::Builder::new().name("heat".into()).spawn(move || w.main());
         let view = shared.lock().map(|v| v.clone()).unwrap_or_default();
         Heat { tx, events, shared, view, panel: false }
@@ -812,6 +877,8 @@ impl Heat {
     pub fn stop(&self) { let _ = self.tx.send(Cmd::Stop); }
     /// the simulator's stand-in for a draw (held = 1)
     pub fn hit(&self, a: f64) { let _ = self.tx.send(Cmd::Hit(a)); }
+    /// GLOW: the lantern's colour now (None: lantern off); sent between heat runs, never during one
+    pub fn glow(&self, c: Option<[u8; 3]>) { let _ = self.tx.send(Cmd::Glow(c)); }
     pub fn set_panel(&mut self, open: bool) { if open != self.panel { self.panel = open; let _ = self.tx.send(Cmd::Panel(open)); } }
 }
 
@@ -825,6 +892,8 @@ struct Worker {
     auto: String,
     phase: Phase, msg: String, live: Option<f64>, target: Option<f64>, t: Option<f64>, end: f64, battery: Option<i64>,
     drop: f64, puff: f64, puff_info: String, abort: bool, panel: bool, found: Vec<Found>, others: Vec<Found>, t0: Instant,
+    /// GLOW: the colour waiting to go out, whether the lantern is on, writes refused in a row
+    glow: Option<Option<[u8; 3]>>, lantern_on: bool, glow_fails: u32,
 }
 
 fn f0(v: Option<f64>) -> String { v.map(|v| format!("{}", v.round() as i64)).unwrap_or_else(|| "--".into()) }
@@ -862,7 +931,7 @@ impl Worker {
         loop {
             let wait = if self.scan_until.is_some() { Duration::from_millis(700) } else { Duration::from_millis(300) };
             match self.rx.recv_timeout(wait) {
-                Ok(c) => self.handle(c),
+                Ok(c) => { let off = matches!(c, Cmd::Glow(None)); self.handle(c); if off { self.glow_fails = 0; } self.glow_out(); }
                 Err(RecvTimeoutError::Timeout) => {}
                 Err(RecvTimeoutError::Disconnected) => { self.disconnect(); return; }
             }
@@ -912,6 +981,26 @@ impl Worker {
             Cmd::Hold(f, full) => self.hold(f, full),
             Cmd::Stop | Cmd::Hit(_) => { if let (Cmd::Hit(a), Some(d)) = (&c, self.dev.as_mut()) { d.set_airflow(*a); } }
             Cmd::Panel(p) => self.panel = p,
+            Cmd::Glow(c) => self.glow = Some(c),
+        }
+    }
+    /// GLOW: send the latest colour (the lantern goes on first); a Puffco that keeps refusing is left alone
+    fn glow_out(&mut self) {
+        let Some(c) = self.glow.take() else { return };
+        if self.phase != Phase::Idle { self.glow = Some(c); return; } // after the run
+        if self.glow_fails >= 3 && c.is_some() { return; }
+        let Some(d) = self.dev.as_mut() else { return };
+        let ok = match c {
+            Some(rgb) => {
+                let on = self.lantern_on || d.lantern(true);
+                self.lantern_on = on;
+                on && d.lantern_color(rgb)
+            }
+            None => { if self.lantern_on { d.lantern(false); self.lantern_on = false; } true }
+        };
+        if ok { self.glow_fails = 0; } else {
+            self.glow_fails += 1;
+            if self.glow_fails == 3 { self.say("This Puffco didn't take lantern colours, so GLOW is paused (turn GLOW off and on to try again)."); }
         }
     }
     /// during a run: Stop, the simulator's hit, the panel, a disconnect; anything else waits its turn
@@ -922,6 +1011,7 @@ impl Worker {
                 Ok(Cmd::Disconnect) => { self.abort = true; self.last = None; }
                 Ok(Cmd::Hit(a)) => { if let Some(d) = self.dev.as_mut() { d.set_airflow(a); } }
                 Ok(Cmd::Panel(p)) => self.panel = p,
+                Ok(Cmd::Glow(c)) => self.glow = Some(c), // kept for after the run: heat comes first
                 Ok(_) => self.say("Stop the heat run first."),
                 Err(TryRecvError::Empty) => return,
                 Err(TryRecvError::Disconnected) => { self.abort = true; return; }
@@ -983,6 +1073,7 @@ impl Worker {
     fn connected(&mut self, d: Box<dyn Device>) {
         let name = d.name();
         self.dev = Some(d);
+        self.lantern_on = false; self.glow_fails = 0;
         self.found.clear();
         let _ = self.ev.send(Event::Connected(true));
         self.say(&format!("Connected to {name}."));
@@ -1233,6 +1324,23 @@ mod tests {
         assert!(got["A name that is far too l"].smooth);
         assert_eq!(got.len(), 2);
         assert!(parse_curves("not json").is_none());
+    }
+    #[test]
+    fn glow_breathes_with_the_music_and_drifts() {
+        let mut g = Glow::new();
+        let mut quiet = [0u8; 3];
+        for _ in 0..100 { quiet = g.color(0.05, 0.0, 0.5, GlowKnob::Intensity); }
+        let mut loud = [0u8; 3];
+        for _ in 0..20 { loud = g.color(0.05, 0.9, 0.5, GlowKnob::Intensity); }
+        let max = |c: [u8; 3]| c.into_iter().max().unwrap();
+        assert!(max(loud) > max(quiet) * 2, "louder is brighter: {quiet:?} {loud:?}");
+        let h0 = g.hue;
+        for _ in 0..100 { g.color(0.05, 0.5, 0.5, GlowKnob::Intensity); }
+        assert!(g.hue != h0, "the rainbow moves");
+        let mut low = [0u8; 3];
+        for _ in 0..100 { low = g.color(0.05, 1.0, 0.0, GlowKnob::Intensity); }
+        assert!(max(low) < 60, "knob down = dim: {low:?}");
+        assert_eq!(lorax::lantern_color([1, 2, 3]), [1, 2, 3, 0, 1, 0, 0, 0]);
     }
     #[test]
     fn lorax_bytes() {

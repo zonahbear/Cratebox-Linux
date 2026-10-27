@@ -112,6 +112,8 @@ distro/            Cratebox OS ISO: build-iso.sh remasters Lubuntu 26.04.1 (laye
   screens only (Settings → Decks; auto = screens only while a MIDI controller is connected; `deck_view`).
 - HEAT registers its own BlueZ agent (NoInputNoOutput, /org/cratebox/agent) since the kiosk has no desktop one;
   HEAT's messages go to heat.log in the data dir.
+- HEAT GLOW: heat::Glow (rainbow + music envelope, FX depth knob) → Cmd::Glow → lantern writes /p/app/ltrn/cmd +
+  /p/app/ltrn/colr (paths from HA-Puff puffco_ble, MIT; untested on a Proxy). Never sent during a heat run or HOLD.
 - HEAT safety rules (slot 4 backed up/restored, 600°F cutoff, 350-590°F clamp) must match zonahbear/truecurve.
 - CRATEBOX_DEMO=1 (+ CRATEBOX_DEMO_HEAT=1) drive the screenshots; 4-deck demo loads decks 3/4 too.
 - rekordbox grids win: stick tracks, XML imports, and collection tracks with a stick twin (same file name + size,
