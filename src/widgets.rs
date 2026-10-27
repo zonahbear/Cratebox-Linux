@@ -3,7 +3,7 @@
 
 use crate::analysis::{phrase_color, Wave};
 use crate::deck::{Deck, Overview};
-use eframe::egui::{self, pos2, vec2, Color32, CornerRadius, FontId, Mesh, Pos2, Rect, Response, Sense, Stroke, StrokeKind, Ui, Vec2};
+use eframe::egui::{self, pos2, vec2, Color32, CornerRadius, FontId, Pos2, Rect, Response, Sense, Stroke, StrokeKind, Ui, Vec2};
 use std::f32::consts::PI;
 
 pub const CUE: Color32 = Color32::from_rgb(0xff, 0xb0, 0x20);
@@ -329,7 +329,7 @@ pub fn paint_jog(p: &egui::Painter, rect: Rect, d: &Deck, i: usize) {
 }
 
 // ---------------------------------------------------------------------------------------------
-// waveforms: aggregate the 300/s data into one column, then draw it as coloured bars (one mesh)
+// waveforms: aggregate the 300/s data into one column, then paint it as coloured bars into a texture
 #[derive(Clone, Copy, Default)]
 pub struct Col { pub peak: u8, pub rms: u8, pub low: u8, pub mid: u8, pub high: u8 }
 
@@ -370,13 +370,6 @@ fn col_bars(half: f32, v: Col, rgb_style: bool, dim: f32) -> [(f32, Color32); 3]
     [(ph, outer), (rh.min(ph), core), (0.0, core)]
 }
 
-/// one column at x (width w) centred on mid_y with half-height `half`
-pub fn wave_col(m: &mut Mesh, x: f32, w: f32, mid_y: f32, half: f32, v: Col, rgb_style: bool, dim: f32) {
-    for (h, col) in col_bars(half, v, rgb_style, dim) {
-        if h > 0.0 { m.add_colored_rect(Rect::from_min_max(pos2(x, mid_y - h), pos2(x + w, mid_y + h)), col); }
-    }
-}
-
 /// the scrolling waveform's pictures, cut into tiles of TILE physical pixels at the deck's normal speed and
 /// kept on the GPU. Drawn every frame at the exact (fractional) position with linear filtering, so the
 /// waveform glides by fractions of a pixel instead of stepping whole pixels (4, 5, 4… px a frame at
@@ -388,25 +381,37 @@ const TILE: usize = 512;
 impl WaveCache {
     fn tile(&mut self, ctx: &egui::Context, w: &Wave, k: i64, cps: f64, hp: usize, rgb_style: bool) -> egui::TextureId {
         self.tiles.entry(k).or_insert_with(|| {
-            let mut img = egui::ColorImage::filled([TILE, hp], Color32::TRANSPARENT);
-            let mid = hp as f32 / 2.0;
-            let half = mid - 2.0;
-            for x in 0..TILE {
+            let img = wave_image(TILE, hp, rgb_style, |x| {
                 let c = k * TILE as i64 + x as i64;
                 let k0 = (c as f64 / cps * w.wps).floor() as i64;
                 let k1 = ((c + 1) as f64 / cps * w.wps).floor() as i64;
-                if k1 < 0 || k0 >= w.peak.len() as i64 { continue; }
-                let v = agg(&w.peak, &w.rms, &w.low, &w.mid, &w.high, k0, k1);
-                for (h, col) in col_bars(half, v, rgb_style, 1.0) {
-                    if h <= 0.0 { continue; }
-                    let (y0, y1) = (((mid - h).round().max(0.0)) as usize, ((mid + h).round() as usize).min(hp));
-                    for y in y0..y1 { img.pixels[y * TILE + x] = col; }
-                }
-            }
+                (k1 >= 0 && k0 < w.peak.len() as i64).then(|| agg(&w.peak, &w.rms, &w.low, &w.mid, &w.high, k0, k1))
+            });
             ctx.load_texture(format!("wave{k}"), img, egui::TextureOptions::LINEAR)
         }).id()
     }
 }
+
+/// a waveform picture `w`×`h` pixels on a transparent background: column x from `col(x)`
+fn wave_image(w: usize, h: usize, rgb_style: bool, col: impl Fn(usize) -> Option<Col>) -> egui::ColorImage {
+    let mut img = egui::ColorImage::filled([w, h], Color32::TRANSPARENT);
+    let mid = h as f32 / 2.0;
+    let half = mid - 2.0;
+    for x in 0..w {
+        let Some(v) = col(x) else { continue };
+        for (bh, c) in col_bars(half, v, rgb_style, 1.0) {
+            if bh <= 0.0 { continue; }
+            let (y0, y1) = (((mid - bh).round().max(0.0)) as usize, ((mid + bh).round() as usize).min(h));
+            for y in y0..y1 { img.pixels[y * w + x] = c; }
+        }
+    }
+    img
+}
+
+/// a whole-track overview drawn once into a texture (it only changes with the track, size or style;
+/// rebuilding thousands of bars every frame for up to 8 overviews was most of the UI's drawing work)
+#[derive(Default)]
+pub struct OverviewCache(Option<((usize, u32, u32, bool), egui::TextureHandle)>);
 
 /// the scrolling waveform for deck `i` (tempo-scaled like rekordbox: synced decks line up)
 pub fn paint_lane(p: &egui::Painter, rect: Rect, d: &Deck, i: usize, zoom: f64, rgb_style: bool, cache: &mut WaveCache) {
@@ -415,6 +420,7 @@ pub fn paint_lane(p: &egui::Painter, rect: Rect, d: &Deck, i: usize, zoom: f64, 
     let mid = rect.center().y;
     let cx = rect.center().x;
     if !d.loaded() || d.ana.is_none() {
+        cache.tiles.clear();
         p.rect_filled(Rect::from_min_size(rect.min, vec2(4.0, rect.height())), 0.0, col);
         p.text(pos2(rect.left() + 14.0, mid), egui::Align2::LEFT_CENTER, if d.loading { format!("Deck {}: analyzing…", i + 1) } else { format!("Deck {}: empty", i + 1) }, prop(13.0), DIM());
         return;
@@ -496,25 +502,28 @@ pub fn paint_lane(p: &egui::Painter, rect: Rect, d: &Deck, i: usize, zoom: f64, 
 }
 
 /// the whole-track overview with phrase strip, cues, loop and playhead
-pub fn paint_overview(p: &egui::Painter, rect: Rect, d: &Deck, rgb_style: bool) {
+pub fn paint_overview(p: &egui::Painter, rect: Rect, d: &Deck, rgb_style: bool, cache: &mut OverviewCache) {
     p.rect_filled(rect, CornerRadius::same(3), WAVE_BG());
     let Some(a) = &d.ana else { return };
     let o: &Overview = &a.overview;
     let n = o.peak.len() as f64;
-    let w = rect.width().max(1.0);
-    let mut m = Mesh::default();
     let ph = 5.0;
-    let mid = rect.top() + (rect.height() - ph) / 2.0;
-    let half = (rect.height() - ph) / 2.0 - 1.0;
-    let mut x = 0f32;
-    while x < w {
-        let k0 = (x as f64 / w as f64 * n).floor() as i64;
-        let k1 = ((x + 1.0) as f64 / w as f64 * n).floor() as i64;
-        let v = agg(&o.peak, &o.rms, &o.low, &o.mid, &o.high, k0, k1);
-        wave_col(&mut m, rect.left() + x, 1.0, mid, half, v, rgb_style, 1.0);
-        x += 1.0;
+    let ppp = p.ctx().pixels_per_point();
+    let (wp, hp) = ((rect.width() * ppp).round().max(1.0) as usize, ((rect.height() - ph) * ppp).round().max(2.0) as usize);
+    let key = (o.peak.as_ptr() as usize, wp as u32, hp as u32, rgb_style);
+    if cache.0.as_ref().is_none_or(|(k, _)| *k != key) {
+        let img = wave_image(wp, hp, rgb_style, |x| {
+            let k0 = (x as f64 / wp as f64 * n).floor() as i64;
+            let k1 = ((x + 1) as f64 / wp as f64 * n).floor() as i64;
+            Some(agg(&o.peak, &o.rms, &o.low, &o.mid, &o.high, k0, k1))
+        });
+        cache.0 = Some((key, p.ctx().load_texture("overview", img, egui::TextureOptions::LINEAR)));
     }
-    p.add(m);
+    if let Some((_, t)) = &cache.0 {
+        let r = Rect::from_min_max(rect.min, pos2(rect.right(), rect.bottom() - ph));
+        p.image(t.id(), r, Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)), Color32::WHITE);
+    }
+    let w = rect.width().max(1.0);
     let dur = d.duration.max(0.001);
     let xt = |t: f64| rect.left() + (t / dur) as f32 * w;
     for (s, e, _, label, _) in d.phrase_spans() {

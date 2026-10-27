@@ -13,6 +13,9 @@ Newest first. Each update arrives through `cratebox-update` (no new ISO needed) 
   pair, connect, disconnect and forget devices. Click the Wi-Fi or Bluetooth readout in the header to
   jump there.
 - Fixed a stray vertical line through the WEB (globe) icon.
+- Review pass: the whole-track overviews (under each lane and on the deck screens) are drawn once into
+  pictures instead of thousands of bars every frame, which is easier on the MacBook; Wi-Fi/Bluetooth
+  refreshes don't pile up behind a scan; tidier Sound settings.
 - The scrolling waveforms are drawn once into pictures kept on the graphics chip and slid by fractions
   of a pixel every frame: no more stepping 4, 5, 4 pixels a frame, no flickering bars, and less work
   for the MacBook each frame.
