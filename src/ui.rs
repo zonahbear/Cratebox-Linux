@@ -863,6 +863,25 @@ impl Gui {
         if ui.selectable_label(browse, "BROWSE").on_hover_text("Big library, waveforms only (SHIFT + press BROWSE on the FLX4)").clicked() {
             self.app.store.settings.browse = !browse; self.app.store.dirty_settings = true;
         }
+        // COPY USB: the open stick (or the first one) → this computer; UPDATE USB once a copy exists
+        let stick = self.app.lists.devices.iter().filter(|d| !crate::usbcopy::is_copy(&d.root))
+            .find(|d| matches!(&self.app.view, View::Dev(x) | View::DevPl(x, _) if x == &d.id))
+            .or_else(|| self.app.lists.devices.iter().find(|d| !crate::usbcopy::is_copy(&d.root)))
+            .map(|d| (d.id.clone(), crate::usbcopy::copy_root(&d.root.file_name().map(|s| s.to_string_lossy().to_string()).unwrap_or_default()).exists()));
+        let label = match (self.app.copying, &stick) {
+            (Some((done, total)), _) => format!("COPYING {}%", if total > 0 { done * 100 / total } else { 0 }),
+            (None, Some((_, true))) => "UPDATE USB".to_string(),
+            _ => "COPY USB".to_string(),
+        };
+        let r = ui.add_enabled(stick.is_some() && self.app.copying.is_none(), egui::Button::new(label))
+            .on_hover_text("Copy the rekordbox stick to this computer, or update that copy (nothing is deleted)")
+            .on_disabled_hover_text("Plug in a rekordbox stick");
+        self.reg("copyusb", r.rect);
+        if r.clicked() { if let Some((id, _)) = stick.clone() { self.app.copy_device(&id); } }
+        let r = ui.add_enabled(stick.is_some() && self.app.copying.is_none(), egui::Button::new("EJECT"))
+            .on_hover_text("Unmount the stick so it's safe to pull out; Cratebox carries on from the local copy");
+        self.reg("eject", r.rect);
+        if r.clicked() { if let Some((id, _)) = stick { self.app.eject_device(&id); } }
         ui.label(egui::RichText::new(&self.app.progress).size(12.0).color(MUTED));
         ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
             ui.add(egui::Label::new(egui::RichText::new("Browse knob scrolls · press it for playlists · drag rows onto a deck or a playlist").size(10.0).color(DIM)).truncate());
@@ -960,14 +979,6 @@ impl Gui {
                 // row actions on hover: × delete / ⏏ close / ⧉ copy
                 let xr = Rect::from_min_size(pos2(rect.right() - 24.0, rect.top()), vec2(20.0, rect.height()));
                 let hovering_x = resp.hover_pos().is_some_and(|hp| xr.contains(hp));
-                // ↓ on a stick: copy it to this computer (or update that copy)
-                let stick_row = r.kind == RowKind::Dev && self.app.lists.devices.iter().any(|d| d.id == r.dev && !crate::usbcopy::is_copy(&d.root));
-                let cr = xr.translate(vec2(-22.0, 0.0));
-                let hovering_c = stick_row && resp.hover_pos().is_some_and(|hp| cr.contains(hp));
-                if stick_row {
-                    p.text(cr.center(), egui::Align2::CENTER_CENTER, "↓", prop(14.0), if hovering_c { FG } else { MUTED });
-                    if hovering_c { resp.clone().on_hover_text("Copy to this computer / update the copy"); }
-                }
                 if resp.hovered() || is_view {
                     let sym = match r.kind { RowKind::Pl | RowKind::Folder | RowKind::Dev => "×", RowKind::DevPl => "+", _ => "" };
                     if !sym.is_empty() { p.text(xr.center(), egui::Align2::CENTER_CENTER, sym, prop(14.0), if hovering_x { FG } else { MUTED }); }
@@ -976,8 +987,7 @@ impl Gui {
                     self.app.tree_sel = k;
                     self.app.focus_tree = false;
                     let on_caret = resp.interact_pointer_pos().is_some_and(|hp| caret_rect.contains(hp));
-                    if hovering_c { let d = r.dev.clone(); self.app.copy_device(&d); }
-                    else if hovering_x {
+                    if hovering_x {
                         match r.kind {
                             RowKind::Pl | RowKind::Folder => self.app.ui.confirm_delete = Some(r.id.clone()),
                             RowKind::Dev => { let d = r.dev.clone(); self.app.close_device(&d); }
