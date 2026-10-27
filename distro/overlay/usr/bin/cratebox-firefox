@@ -1,18 +1,27 @@
 #!/bin/sh
-# Firefox in a firejail sandbox for Cratebox's header button. It gets its own home
-# (~/.local/share/cratebox/firefox-box), so it can't see your music or Cratebox's data; downloads
-# land in that box's Downloads. First run installs Firefox (Mozilla's apt repo, not the snap) and firejail.
-BOX="$HOME/.local/share/cratebox/firefox-box"
+# Firefox in a firejail sandbox for Cratebox's header button. firejail's Firefox profile hides most
+# of your home folder; ~/Music/Cratebox Downloads is let in and is where downloads go (a Firefox policy),
+# so Cratebox adds them to the collection (and copies them to a plugged-in stick).
+# First run installs Firefox (Mozilla's apt repo, not the snap), firejail and that policy.
+DL="$HOME/Music/Cratebox Downloads"
+mkdir -p "$DL"
+if ! command -v firefox >/dev/null || ! command -v firejail >/dev/null || [ ! -f /etc/firefox/policies/policies.json ]; then
+    setup=$(mktemp)
+    cat > "$setup" <<'SETUP'
+set -e
+install -d -m 0755 /etc/apt/keyrings /etc/firefox/policies
 if ! command -v firefox >/dev/null || ! command -v firejail >/dev/null; then
-    exec x-terminal-emulator -e sh -c '
-        echo "First time: installing Firefox (from Mozilla) and firejail. Your password, please."
-        sudo sh -c "install -d -m 0755 /etc/apt/keyrings &&
-          curl -fsSL https://packages.mozilla.org/apt/repo-signing-key.gpg -o /etc/apt/keyrings/packages.mozilla.org.asc &&
-          echo \"deb [signed-by=/etc/apt/keyrings/packages.mozilla.org.asc] https://packages.mozilla.org/apt mozilla main\" > /etc/apt/sources.list.d/mozilla.list &&
-          printf \"Package: *\nPin: origin packages.mozilla.org\nPin-Priority: 1000\n\" > /etc/apt/preferences.d/mozilla &&
-          apt-get update && apt-get install -y firefox firejail" &&
-        echo "Done. Press the FIREFOX button again." || echo "Install failed (see above)."
-        sleep 5'
+    curl -fsSL https://packages.mozilla.org/apt/repo-signing-key.gpg -o /etc/apt/keyrings/packages.mozilla.org.asc
+    echo "deb [signed-by=/etc/apt/keyrings/packages.mozilla.org.asc] https://packages.mozilla.org/apt mozilla main" > /etc/apt/sources.list.d/mozilla.list
+    printf 'Package: *\nPin: origin packages.mozilla.org\nPin-Priority: 1000\n' > /etc/apt/preferences.d/mozilla
+    apt-get update
+    apt-get install -y firefox firejail
 fi
-mkdir -p "$BOX"
-exec firejail --private="$BOX" --noroot --nogroups firefox --no-remote "$@"
+cat > /etc/firefox/policies/policies.json <<'JSON'
+{"policies": {"DownloadDirectory": "${home}/Music/Cratebox Downloads", "PromptForDownloadLocation": false}}
+JSON
+SETUP
+    exec x-terminal-emulator -e sh -c "echo 'First time: setting up Firefox (from Mozilla) and firejail. Your password, please.';
+        sudo sh '$setup' && echo 'Done. Press the FIREFOX button again.' || echo 'Setup failed (see above).'; rm -f '$setup'; sleep 5"
+fi
+exec firejail --whitelist="$DL" firefox --no-remote "$@"
